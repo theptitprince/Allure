@@ -1497,13 +1497,32 @@ class PolarSampleStore:
     def excluded_ranges(self):
         return dict(getattr(self, "_excluded_ranges", {}) or {})
 
+    def set_excluded_undated(self, session_ids):
+        """Passes dont les echantillons SANS HORODATAGE sont ecartes du
+        calcul : {session_id, ...}.
+
+        Une plage horaire ne peut, par construction, rien dire d'un
+        echantillon qui n'a pas d'heure -- et ces echantillons existent
+        (entrepots tres anciens, sauvegardes venues d'ailleurs). Sans ce
+        second canal, decocher le troncon qui les porte ne retirait
+        RIEN du calcul tout en affichant une mesure de moins : l'interface
+        annoncait une exclusion qui n'avait pas lieu."""
+        self._excluded_undated = {str(sid) for sid in (session_ids or ()) if sid is not None}
+
+    def excluded_undated(self):
+        return set(getattr(self, "_excluded_undated", set()) or set())
+
     def _in_excluded_range(self, s):
+        t = s.get("t")
+        if t is None:
+            # Sans heure, aucune plage ne peut se prononcer : c'est le
+            # drapeau par passe qui decide (voir set_excluded_undated).
+            return s.get("session_id") in getattr(self, "_excluded_undated", ())
         rs = getattr(self, "_excluded_ranges", None)
         if not rs:
             return False
-        for a, b in rs.get(s.get("session_id"), ()):  # noqa: B007
-            t = s.get("t")
-            if t is not None and a <= t <= b:
+        for a, b in rs.get(s.get("session_id"), ()):
+            if a <= t <= b:
                 return True
         return False
 
@@ -1582,6 +1601,24 @@ class PolarSampleStore:
         return sum(1 for s in self._samples
                     if s["sails"] == sails and s["engines"] == engines and s.get("derive") == derive
                     and self._included(s, session_ids))
+
+    def count_included(self, session_ids=None):
+        """Nombre d'echantillons qui COMPTENT REELLEMENT, c'est-a-dire ceux
+        que table()/max_table() verront avec ce meme filtre.
+
+        len(store) dit combien l'entrepot CONTIENT ; cette methode dit
+        combien il EXPLOITE. Afficher le premier la ou l'utilisateur vient
+        de trier revient a lui repondre a cote de sa question."""
+        return sum(1 for s in self._samples if self._included(s, session_ids))
+
+    def sample_count_for_session(self, session_id, kept_only=False):
+        """Nombre d'echantillons d'une passe. kept_only=True ne compte que
+        ceux qui survivent aux troncons ecartes de cette passe (la case
+        'Incluse', elle, ne joue pas ici : une passe exclue reste decrite
+        par ce qu'elle contient)."""
+        return sum(1 for s in self._samples
+                    if s.get("session_id") == session_id
+                    and (not kept_only or self._included(s, None)))
 
     def _cells(self, sails, engines, derive, twa_bin_deg, tws_bin_kn, symmetric,
                session_ids):
@@ -1667,11 +1704,18 @@ class PolarSampleStore:
         couvert vingt cases apprend beaucoup plus qu'une passe qui a passe
         deux heures dans la meme -- a nombre d'echantillons egal.
 
+        Ne compte que les echantillons RETENUS : un troncon ecarte a la main
+        ne doit pas continuer a peser dans la note d'une passe, sans quoi
+        l'Entrepot noterait autre chose que ce qu'il calcule. La case
+        'Incluse' de la passe, elle, ne joue pas ici : une passe mise de
+        cote reste consultable telle qu'elle est.
+
         Pour TOUTES les passes d'un coup, voir session_overview() : appeler
         cette methode dans une boucle reparcourt l'entrepot entier a chaque
         passe, et c'est exactement ce qui rendait l'ouverture de l'Entrepot
         proportionnelle a (passes x echantillons)."""
-        samples = [s for s in self._samples if s.get("session_id") == session_id]
+        samples = [s for s in self._samples
+                   if s.get("session_id") == session_id and self._included(s, None)]
         return self._session_confidence_of(samples, twa_bin_deg, tws_bin_kn, symmetric)
 
     def session_overview(self, twa_bin_deg=5.0, tws_bin_kn=2.0, symmetric=True):
@@ -1679,7 +1723,15 @@ class PolarSampleStore:
         TOUTES les passes, en UN SEUL parcours de l'entrepot :
 
           {session_id: {"configs": [((voiles, moteurs, derive), n), ...],
-                        "confidence": <dict de session_confidence>}}
+                        "confidence": <dict de session_confidence>,
+                        "n_total": <echantillons contenus>,
+                        "n_kept":  <echantillons retenus>}}
+
+        Configurations et confiance ne decrivent que les echantillons
+        RETENUS -- les troncons ecartes a la main n'ont plus a figurer dans
+        le portrait d'une passe, ni par leur voilure ni par leur poids. Le
+        total brut reste rendu a cote (n_total) : ecarter n'est pas
+        supprimer, et l'utilisateur doit continuer a voir ce qui dort.
 
         Raison d'etre : la liste des passes appelait configs_for_session()
         puis session_confidence() PAR LIGNE, chacune reparcourant tout
@@ -1688,12 +1740,17 @@ class PolarSampleStore:
         parcours regroupe les echantillons par passe, et chaque calcul ne
         voit plus que les siens."""
         groups = {}
+        totals = defaultdict(int)
         for s in self._samples:
             sid = s.get("session_id")
-            if sid is not None:
+            if sid is None:
+                continue
+            totals[sid] += 1
+            if self._included(s, None):
                 groups.setdefault(sid, []).append(s)
         out = {}
-        for sid, samples in groups.items():
+        for sid, n_total in totals.items():
+            samples = groups.get(sid, [])
             counts = defaultdict(int)
             for s in samples:
                 counts[(s["sails"], s["engines"], s.get("derive"))] += 1
@@ -1701,6 +1758,8 @@ class PolarSampleStore:
                 "configs": sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])),
                 "confidence": self._session_confidence_of(
                     samples, twa_bin_deg, tws_bin_kn, symmetric),
+                "n_total": n_total,
+                "n_kept": len(samples),
             }
         return out
 
@@ -2335,12 +2394,23 @@ def split_into_legs(samples, min_duration_s=LEG_MIN_DURATION_S,
             "tack": (1 if sum(nz) > 0 else -1) if nz else 0,
             "cause": seg["cause"],
         })
-    # Les echantillons sans horodatage rejoignent le dernier troncon : ils
-    # existent, ils doivent rester comptables et visibles quelque part.
+    # Les echantillons sans horodatage forment leur PROPRE troncon, en
+    # queue. Les fondre dans le dernier troncon date, comme on le faisait,
+    # rendait ce troncon menteur de deux facons : il annoncait plus de
+    # mesures qu'il n'en avait vraiment, et le decocher n'en retirait
+    # aucune du calcul (une plage horaire ne peut rien dire d'un
+    # echantillon sans heure). Separes, ils restent visibles, comptables,
+    # et s'ecartent pour de bon -- par le drapeau prevu pour eux (voir
+    # PolarSampleStore.set_excluded_undated).
     undated = [s for s in ordered if s.get("t") is None]
-    if undated and legs:
-        legs[-1]["samples"] = legs[-1]["samples"] + undated
-        legs[-1]["n"] += len(undated)
+    if undated:
+        legs.append({
+            "i": len(legs), "start": None, "end": None, "n": len(undated),
+            "samples": list(undated), "sails": tuple(undated[0]["sails"]),
+            "engines": tuple(undated[0]["engines"]),
+            "derive": undated[0].get("derive"),
+            "tack": 0, "cause": "sans horodatage",
+        })
     return legs
 
 

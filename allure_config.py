@@ -92,7 +92,13 @@ APP_CREDIT = "ETDEL 2026"
 # separation est ce qui protege le contrat de compatibilite (voir
 # allure_engine.fixup_sample) : l'application peut passer en 2.0, 3.0 ou
 # 10.0 sans qu'un seul fichier deja ecrit devienne illisible.
-APP_VERSION = "2.0a"
+#
+# FORME DU NUMERO : "X.Y" puis une LETTRE pour les livraisons mineures --
+# 2.0a, 2.0b, 2.0c... Le chiffre change quand l'application change de
+# visage (nouvelle etape, nouveau format, refonte) ; la lettre suffit pour
+# une correction ou un ajustement. Chaque livraison a son entree dans
+# CHANGELOG.md, a la racine du depot.
+APP_VERSION = "2.0b"
 
 # =========================================================================
 # Ou vivent les fichiers
@@ -670,6 +676,12 @@ def _fixup_session_record(rec):
         # qu'elle exclut et le dira encore dans dix ans.
         # Absente des passes anterieures : liste vide, tout est compte.
         "excluded_ranges": _fixup_ranges(rec.get("excluded_ranges")),
+        # Les echantillons SANS HORODATAGE de cette passe sont-ils ecartes ?
+        # Une plage horaire ne peut rien dire d'un echantillon qui n'a pas
+        # d'heure : il lui faut ce drapeau a part, sans quoi le troncon qui
+        # les porte se decocherait sans rien retirer du calcul. Absent des
+        # passes anterieures : False, tout est compte.
+        "exclude_undated": bool(rec.get("exclude_undated", False)),
     }
 
 
