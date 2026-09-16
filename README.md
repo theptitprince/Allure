@@ -83,7 +83,7 @@ Récupérez le dépôt, au choix :
 - ou, si vous avez git :
 
 ```powershell
-git clone https://github.com/theptitprince/allure.git C:\Allure
+git clone https://github.com/theptitprince/Allure.git C:\Allure
 ```
 
 Le programme tient en **quatre fichiers, qui doivent rester ensemble** :
