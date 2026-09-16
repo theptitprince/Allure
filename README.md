@@ -12,7 +12,8 @@ trames NMEA0183 sur le réseau du bord (UDP), et qui veut savoir ce que le
 bateau *fait vraiment* : Allure écoute les trames, enregistre des passes
 annotées par voilure, les accumule sortie après sortie dans un entrepôt, et
 en tire des polaires par configuration, une polaire max pour le routage
-(`.pol`, `.csv`, TimeZero) et un guide de voilure. Version actuelle : 2.0a.
+(`.pol`, `.csv`, TimeZero) et un guide de voilure. Version actuelle :
+2.0b — l'historique des livraisons est dans [CHANGELOG.md](CHANGELOG.md).
 
 Python 3.8+, tkinter et matplotlib — Windows en priorité.
 

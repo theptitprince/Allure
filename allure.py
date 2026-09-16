@@ -4358,7 +4358,11 @@ class App(tk.Tk):
                        "tableau (un second clic inverse le sens). Un clic sur la case de la "
                        "colonne 'Incluse' inclut/"
                        "exclut directement la passe du calcul de polaire, sans la supprimer -- "
-                       "pratique pour ecarter une sortie douteuse. 'Modifier' permet de corriger "
+                       "pratique pour ecarter une sortie douteuse. La colonne 'Echantillons' "
+                       "compte ce qui est RETENU ; quand des troncons ont ete decoches "
+                       "(double-clic sur la passe), elle affiche 'retenus / contenus' -- rien "
+                       "n'est perdu, la difference dort simplement dans l'entrepot. "
+                       "'Modifier' permet de corriger "
                        "a posteriori les voiles/moteurs/derive d'une passe deja entreposee -- "
                        "utile quand on s'apercoit longtemps apres que l'enregistrement portait la "
                        "mauvaise etiquette. 'Recalculer depuis le tampon' va plus loin : il "
@@ -4421,8 +4425,11 @@ class App(tk.Tk):
                        "C indicative, D fragile. Elle recompense la REPARTITION plus que le "
                        "nombre : des mesures prises a des moments differents, sur des cases "
                        "differentes, valent bien mieux que deux heures passees dans le meme "
-                       "bord. Purement informative : seule la case Incluse decide de ce qui "
-                       "entre dans le calcul.", wraplength="auto")
+                       "bord. Elle ne porte que sur les mesures RETENUES : decocher des "
+                       "troncons la fait bouger. Purement informative pour autant -- elle "
+                       "n'ecarte rien d'elle-meme : ce sont la case Incluse et les troncons "
+                       "decoches qui decident de ce qui entre dans le calcul.",
+             wraplength="auto")
         self.session_conf_lbl = tk.Label(f_store, text="", bg=BG_APP, fg=FG_LABEL,
                                           font=FONT_MONO, anchor="w", justify="left")
         self.session_conf_lbl.pack(fill="x", padx=6, pady=(0, 4))
@@ -4495,10 +4502,26 @@ class App(tk.Tk):
         # que personne ne regardait encore.
 
     def _refresh_store_size_label(self):
+        """Ce que l'entrepot CONTIENT, et ce qu'il EXPLOITE reellement.
+
+        Annoncer le seul total brut juste au-dessus d'un tableau ou l'on
+        vient de trier etait la principale raison de croire que le tri ne
+        servait a rien : la polaire, elle, ecartait bien ce qu'il fallait,
+        mais le bandeau continuait de compter tout. Les deux nombres sont
+        desormais cote a cote, et le second est celui qui part dans le
+        calcul."""
+        sids = self._included_session_ids()
         n = len(self.persistent_store)
-        n_cfg = len(self.persistent_store.configs())
-        self.store_size_lbl.configure(
-            text=f"{n} echantillon(s) accumule(s), repartis sur {n_cfg} configuration(s) voiles/moteurs.")
+        n_kept = self.persistent_store.count_included(session_ids=sids)
+        n_cfg = len(self.persistent_store.configs(session_ids=sids))
+        if n_kept == n:
+            txt = (f"{n} echantillon(s) accumule(s), tous retenus, "
+                   f"repartis sur {n_cfg} configuration(s) voiles/moteurs.")
+        else:
+            txt = (f"{n_kept} echantillon(s) RETENUS sur {n} accumule(s) "
+                   f"({n - n_kept} ecarte(s) : passes non incluses ou troncons decoches), "
+                   f"repartis sur {n_cfg} configuration(s) voiles/moteurs.")
+        self.store_size_lbl.configure(text=txt)
 
     def _reset_store(self):
         if len(self.persistent_store) == 0 and not self.sessions_index:
@@ -4798,6 +4821,14 @@ class App(tk.Tk):
             self.sessions_tree.delete(row)
         self._sessions_tree_rows = {}
 
+        # Realignement systematique, AVANT de compter : sessions_index
+        # change par bien des chemins (restauration de corbeille, import de
+        # sauvegarde, tri automatique...), et l'entrepot doit suivre a tous
+        # les coups. En tete de methode parce que le releve ci-dessous
+        # decrit desormais ce qui est RETENU : le compter avant d'avoir
+        # repercute les troncons ecartes afficherait l'etat d'avant.
+        self._apply_excluded_ranges()
+
         # UN SEUL parcours de l'entrepot pour toutes les lignes (voir
         # session_overview) : configurations et confiance par passe. Avant,
         # chaque ligne reparcourait l'entrepot deux fois -- au demarrage,
@@ -4812,23 +4843,42 @@ class App(tk.Tk):
             date_txt = time.strftime("%d/%m/%Y %H:%M", time.localtime(rec["created_at"])) \
                 if rec.get("created_at") else "?"
             ov = overview.get(session_id)
+            # Configurations decrites d'apres les mesures RETENUES. Repli sur
+            # la passe entiere quand il n'en reste aucune : une ligne dont
+            # tous les troncons sont ecartes doit continuer a dire ce
+            # qu'elle etait, sinon l'utilisateur ne sait plus ce qu'il a mis
+            # de cote (la colonne Echantillons, elle, affiche bien 0 / n).
+            cfg_src = (ov["configs"] if ov else [])
+            if ov and not cfg_src and ov["n_total"]:
+                cfg_src = self.persistent_store.configs_for_session(session_id)
             voiles_txt, moteurs_txt, derive_txt = self._session_config_texts(
-                session_id, configs=(ov["configs"] if ov else []))
+                session_id, configs=cfg_src)
             # Indice de confiance de la passe : ce que vaut CET
             # enregistrement -- purement informatif, il n'exclut rien et ne
-            # change aucune vitesse (c'est la case "Incluse", et elle seule,
-            # qui decide de ce qui entre dans le calcul).
+            # change aucune vitesse (ce sont la case "Incluse" et les
+            # troncons decoches qui decident de ce qui entre dans le
+            # calcul). Il est calcule sur les seules mesures RETENUES : une
+            # note batie sur des troncons que l'utilisateur vient d'ecarter
+            # noterait une passe qui n'existe plus.
             cinfo = ov["confidence"] if ov else self.persistent_store.session_confidence(
                 session_id,
                 twa_bin_deg=self.config_data["twa_bin_deg"],
                 tws_bin_kn=self.config_data["tws_bin_kn"],
                 symmetric=self.config_data["symmetric_port_starboard"])
             conf_txt = f"{cinfo['level']}  {cinfo['score']:3d}  {cinfo['word']}"
+            # Echantillons : ce qui COMPTE, suivi du total contenu quand des
+            # troncons ont ete decoches. L'ancienne colonne
+            # affichait le compte fige au traitement (rec["sample_count"]),
+            # qui ne bougeait jamais d'un pouce quand on ecartait la moitie
+            # d'une passe -- de quoi croire que le tri restait sans effet.
+            n_total = ov["n_total"] if ov else rec.get("sample_count", 0)
+            n_kept = ov["n_kept"] if ov else n_total
+            ech_txt = f"{n_kept}" if n_kept == n_total else f"{n_kept} / {n_total}"
             rows.append({
                 "i": i, "id": session_id,
                 "values": (date_txt, rec.get("mode", "?"),
                            os.path.basename(rec.get("source", "")) or "-",
-                           voiles_txt, moteurs_txt, derive_txt, rec.get("sample_count", 0),
+                           voiles_txt, moteurs_txt, derive_txt, ech_txt,
                            conf_txt,
                            "☑" if rec.get("included", True) else "☐"),
                 # Cles de tri prises sur la DONNEE et non sur le texte
@@ -4841,7 +4891,7 @@ class App(tk.Tk):
                          "voiles": voiles_txt.lower(),
                          "moteurs": moteurs_txt.lower(),
                          "derive": derive_txt.lower(),
-                         "ech": rec.get("sample_count", 0),
+                         "ech": n_kept,
                          "conf": cinfo["score"],
                          "incluse": bool(rec.get("included", True))},
                 "conf": cinfo,
@@ -4860,10 +4910,6 @@ class App(tk.Tk):
                 self.sessions_tree.selection_set(iid)
         self._refresh_sessions_headings()
         self._refresh_sessions_all_checkbox()
-        # Realignement systematique : sessions_index change par bien des
-        # chemins (restauration de corbeille, import de sauvegarde, tri
-        # automatique...), et l'entrepot doit suivre a tous les coups.
-        self._apply_excluded_ranges()
 
         if hasattr(self, "store_size_lbl"):
             self._refresh_store_size_label()
@@ -4893,9 +4939,15 @@ class App(tk.Tk):
             symmetric=self.config_data["symmetric_port_starboard"])
         mins = int(c.get("duration_s", 0) // 60)
         disp = ("-" if c["spread"] is None else f"{100.0 * c['spread']:.0f} %")
+        # c['n'] ne compte que les mesures RETENUES : quand des troncons ont
+        # ete decoches, le total contenu est rappele a cote -- sans lui, la
+        # ligne semblerait avoir perdu des mesures en chemin.
+        n_total = self.persistent_store.sample_count_for_session(sid)
+        ech_txt = (f"{c['n']} echantillon(s)" if c["n"] == n_total
+                   else f"{c['n']} echantillon(s) retenu(s) sur {n_total}")
         self.session_conf_lbl.configure(
             text=f"Passe selectionnee : {c['level']} {c['score']}/100 ({c['word']})   "
-                 f"{c['n']} echantillon(s), {c['blocks']} moment(s) independant(s), "
+                 f"{ech_txt}, {c['blocks']} moment(s) independant(s), "
                  f"{c['cells']} case(s) couverte(s), {mins} min, dispersion {disp}\n"
                  f"   -> {c['why']}")
 
@@ -5146,7 +5198,10 @@ class App(tk.Tk):
         note_txt = ("Une passe de plusieurs heures n'est pas un bloc : elle se decoupe "
                     "toute seule aux manoeuvres, aux changements de voilure et aux "
                     "interruptions. Decochez un troncon pour l'ecarter du calcul -- "
-                    "rien n'est supprime, la polaire se retrace aussitot.")
+                    "rien n'est supprime, la polaire se retrace aussitot, et le "
+                    "tableau de l'Entrepot suit (colonnes Echantillons et Confiance). "
+                    "Un eventuel troncon 'sans horodatage' regroupe des mesures venues "
+                    "d'un entrepot ancien : il s'ecarte comme les autres.")
         tk.Label(parent, text=note_txt, bg=BG_APP, fg=FG_LABEL_DIM,
                  font=("Segoe UI", 8), wraplength=340, justify="left",
                  anchor="w").pack(fill="x", pady=(0, 6))
@@ -5158,10 +5213,14 @@ class App(tk.Tk):
         summary.pack(fill="x", pady=(6, 0))
 
         excluded = self._session_excluded_ranges(session_id)
+        rec = self._session_record(session_id)
+        undated_out = bool((rec or {}).get("exclude_undated"))
 
         def _is_excluded(leg):
             if leg["start"] is None:
-                return False
+                # Troncon sans horodatage : son sort est porte par le
+                # drapeau de la passe, pas par une plage horaire.
+                return undated_out
             mid = (leg["start"] + leg["end"]) / 2.0
             return any(a <= mid <= b for a, b in excluded)
 
@@ -5176,14 +5235,21 @@ class App(tk.Tk):
                       + (f"   --   {out} troncon(s) ecarte(s)" if out else "")))
 
         def _apply():
-            ranges = []
+            ranges, undated = [], False
             for lg, var in vars_by_leg:
-                if not var.get() and lg["start"] is not None:
-                    # Bornes elargies d'une demi-seconde : un echantillon
-                    # pile sur la frontiere doit tomber du bon cote, sans
-                    # dependre d'un arrondi de flottant.
-                    ranges.append((lg["start"] - 0.5, lg["end"] + 0.5))
-            self._set_session_excluded_ranges(session_id, ranges)
+                if var.get():
+                    continue
+                if lg["start"] is None:
+                    # Pas d'heure, donc pas de plage possible : ce troncon
+                    # s'ecarte par le drapeau de la passe.
+                    undated = True
+                    continue
+                # Bornes elargies d'une demi-seconde : un echantillon
+                # pile sur la frontiere doit tomber du bon cote, sans
+                # dependre d'un arrondi de flottant.
+                ranges.append((lg["start"] - 0.5, lg["end"] + 0.5))
+            self._set_session_excluded_ranges(session_id, ranges,
+                                              exclude_undated=undated)
             _refresh_summary()
             on_change()
 
@@ -5200,7 +5266,13 @@ class App(tk.Tk):
             cfg_txt = "+".join(lg["sails"]) or "-"
             if lg["engines"]:
                 cfg_txt += " / " + "+".join(lg["engines"])
-            txt = (f"{when}  {dur:.0f} min  {lg['n']} mes.\n"
+            # Un troncon sans horodatage n'a ni heure de debut ni duree :
+            # afficher "?  0 min" laissait croire a une mesure vide alors
+            # qu'il porte de vraies mesures -- il se decrit par ce qu'il
+            # est, pas par ce qui lui manque.
+            head = (f"{when}  {dur:.0f} min  {lg['n']} mes." if lg["start"] is not None
+                    else f"sans horodatage  --  {lg['n']} mes.")
+            txt = (f"{head}\n"
                    f"    {twa_txt}  |  {pe.LEG_TACK_LABELS[lg['tack']]}\n"
                    f"    {cfg_txt}  |  confiance {conf['level']} {conf['score']}\n"
                    f"    depuis : {lg['cause']}")
@@ -5243,19 +5315,30 @@ class App(tk.Tk):
         self.persistent_store.set_excluded_ranges({
             rec["id"]: [tuple(r) for r in (rec.get("excluded_ranges") or [])]
             for rec in self.sessions_index})
+        # Second canal, pour les echantillons qu'aucune plage horaire ne
+        # peut designer -- ceux qui n'ont pas d'heure (voir
+        # PolarSampleStore.set_excluded_undated).
+        self.persistent_store.set_excluded_undated(
+            {rec["id"] for rec in self.sessions_index if rec.get("exclude_undated")})
 
     def _session_excluded_ranges(self, session_id):
         rec = self._session_record(session_id)
         return [list(r) for r in ((rec or {}).get("excluded_ranges") or [])]
 
-    def _set_session_excluded_ranges(self, session_id, ranges):
+    def _set_session_excluded_ranges(self, session_id, ranges, exclude_undated=None):
         """Enregistre les plages ecartees d'une passe, persiste et retrace.
+        exclude_undated (True/False) traite a part les echantillons sans
+        horodatage, qu'aucune plage ne peut designer ; None = ne pas y
+        toucher.
+
         Rien n'est supprime : les echantillons restent dans l'entrepot et
         redeviennent comptables des que la plage est levee."""
         rec = self._session_record(session_id)
         if rec is None:
             return
         rec["excluded_ranges"] = [[float(a), float(b)] for a, b in ranges]
+        if exclude_undated is not None:
+            rec["exclude_undated"] = bool(exclude_undated)
         pcfg.save_sessions_index(self.sessions_index)
         self._apply_excluded_ranges()
         self._refresh_sessions_list()
