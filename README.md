@@ -1,10 +1,20 @@
-# Allure v2.0a — Générateur de polaires
+# Allure — Générateur de polaires
+
+[![Licence GPL-3.0-or-later](https://img.shields.io/badge/licence-GPL--3.0--or--later-blue.svg)](LICENSE)
+[![Python 3.8+](https://img.shields.io/badge/python-3.8%2B-3776AB.svg)](https://www.python.org/downloads/)
+[![Windows](https://img.shields.io/badge/plateforme-Windows-0078D6.svg)](#1-installation)
 
 Générateur de polaires de vitesse à partir de trames NMEA0183, avec tampon
 d'enregistrement glissant, suivi en direct et entrepôt cumulatif.
 
-Python 3.8+, tkinter et matplotlib — Windows en priorité (un `Allure.exe`
-autonome peut être fabriqué, voir plus bas).
+**À qui ça sert.** À l'équipage d'un voilier dont la passerelle diffuse ses
+trames NMEA0183 sur le réseau du bord (UDP), et qui veut savoir ce que le
+bateau *fait vraiment* : Allure écoute les trames, enregistre des passes
+annotées par voilure, les accumule sortie après sortie dans un entrepôt, et
+en tire des polaires par configuration, une polaire max pour le routage
+(`.pol`, `.csv`, TimeZero) et un guide de voilure. Version actuelle : 2.0a.
+
+Python 3.8+, tkinter et matplotlib — Windows en priorité.
 
 ---
 
@@ -73,7 +83,7 @@ Récupérez le dépôt, au choix :
 - ou, si vous avez git :
 
 ```powershell
-git clone https://github.com/theptitprince/Allure.git C:\Allure
+git clone https://github.com/theptitprince/allure.git C:\Allure
 ```
 
 Le programme tient en **quatre fichiers, qui doivent rester ensemble** :
@@ -88,23 +98,8 @@ Le programme tient en **quatre fichiers, qui doivent rester ensemble** :
 Les quatre fichiers sont indispensables. Il n'y a **pas** de lanceur à
 part : `allure.py` se lance directement.
 
-Un cinquième fichier, **facultatif** : `construire_exe.bat` — voir
-« Fabriquer un Allure.exe autonome » ci-dessous.
-
 Le fichier `LICENSE` contient le texte de la licence du programme (voir
 « Licence » en fin de document).
-
-### Fichiers de test (facultatifs)
-
-Vous pouvez les ignorer pour utiliser le programme. Ils servent à vérifier
-qu'une version fonctionne correctement sur votre machine :
-
-`test_allure_engine.py`, `test_allure_buffer.py`, `test_allure_compat.py`,
-`test_allure.py` et `test_allure_live.py`.
-
-`test_allure.py` rejoue en plus une capture NMEA réelle, `capture.log`, qui
-n'est **pas** distribuée dans le dépôt (elle contient une trace GPS). Les
-quatre autres jeux de tests s'en passent.
 
 ---
 
@@ -143,7 +138,7 @@ pare-feu, même si `python.exe` avait été autorisé depuis toujours. Le
 socket s'ouvre normalement — aucune erreur, aucune boîte — et les
 datagrammes sont jetés en silence avant d'arriver.
 
-Le suivi en direct le dit maintenant explicitement : la section *Réception*
+Le suivi en direct le dit explicitement : la section *Réception*
 affiche l'état réel de chaque voie (`à l'écoute, AUCUNE trame (depuis 45 s)`
 contre `1 234 trame(s), dernière en direct`), et au-delà de vingt secondes
 de silence sur une voie ouverte, un bandeau nomme la cause, l'exécutable
@@ -159,35 +154,6 @@ volontaire : une erreur dans la boucle de rafraîchissement, qui tourne
 deux fois et demie par seconde — elle est consignée **une seule fois**,
 sans boîte, sinon vous seriez noyé sous les dialogues ; et la boucle
 survit, car c'est elle qui tient le tampon et l'acquisition.
-
-### Fabriquer un Allure.exe autonome (facultatif)
-
-Pour installer Allure sur un poste **sans y installer Python** (l'ordinateur
-de la passerelle, typiquement) : double-cliquez **`construire_exe.bat`** sur
-un poste où Python est déjà en place. Le script installe PyInstaller,
-dessine l'icône d'Allure (le disque bleu à la voile blanche — le logo historique de la zone de notification), construit **un `Allure.exe`
-unique** qui embarque Python, tkinter, matplotlib et tout Allure, et le
-dépose à côté des `.py`. Comptez quelques minutes et ~60 Mo — c'est un
-Python complet dans un seul fichier.
-
-Ensuite, `Allure.exe` se copie seul sur n'importe quel poste Windows et se
-lance d'un double-clic, sans console. Trois choses à savoir :
-
-- il crée ses quatre dossiers (`donnees`, `reglages`…) **à côté de lui** :
-  laissé dans le dossier des `.py`, il partage l'entrepôt et les réglages
-  de la version script ; copié ailleurs, il repart à neuf (exportez une
-  sauvegarde depuis la roue dentée pour emporter vos données) ;
-- **pare-feu** : `Allure.exe` est un exécutable *nouveau* — autorisez-le en
-  réseau **privé** au premier lancement, sinon les trames UDP sont jetées
-  en silence (le panneau *Réception* vous le signalera) ;
-- au premier lancement sur un autre poste, SmartScreen peut afficher
-  « Windows a protégé votre ordinateur » (exe non signé) : *Informations
-  complémentaires* → *Exécuter quand même*.
-
-À chaque nouvelle version des `.py`, relancez simplement le `.bat` pour
-reconstruire l'exe. Le *Diagnostic de l'installation* (roue dentée →
-*Sauvegardes*) indique « exe autonome PyInstaller » quand c'est lui qui
-tourne.
 
 ---
 
@@ -208,7 +174,7 @@ versions précédentes écrivaient tout en vrac à côté des `.py` ; au premier
 lancement, ces fichiers sont **déplacés automatiquement** dans les bons
 dossiers. Un fichier n'est jamais écrasé : si les deux existent, c'est la
 version déjà rangée qui l'emporte et l'ancienne reste à la racine, où vous
-pourrez l'examiner. Le déplacement est verrouillé par `test_allure_compat.py`.
+pourrez l'examiner.
 
 **Sauvegarde.** Le plus simple : roue dentée → *Sauvegardes* → *Exporter
 une sauvegarde*. Cela produit un fichier `.json` unique contenant l'entrepôt
@@ -218,7 +184,7 @@ au même endroit.
 **Changement d'ordinateur ou de version.** Recopiez les quatre fichiers du
 programme, puis réimportez votre sauvegarde et vos réglages. Une version
 récente relit toujours les données de n'importe quelle version antérieure —
-c'est un engagement tenu, et vérifié par `test_allure_compat.py`.
+c'est un engagement du programme.
 
 ---
 
@@ -321,9 +287,9 @@ tronquée) est écartée en silence plutôt que de ruiner une moyenne horaire.
 **L'indice de confiance.** Une polaire ne dit pas seulement une vitesse :
 elle dit aussi, en creux, *crois-moi*. Or toutes les cases ne méritent pas
 la même croyance — une case bâtie sur 200 échantillons pris dans un seul
-bord de dix minutes avait jusqu'ici exactement la même autorité qu'une case
-bâtie sur 20 échantillons répartis sur huit sorties. Ce n'est pas du tout la
-même chose. L'indice (**A** solide, **B** bonne, **C** indicative, **D**
+bord de dix minutes et une case bâtie sur 20 échantillons répartis sur huit
+sorties n'ont rien de comparable, et un simple effectif leur donnerait
+pourtant la même autorité. L'indice (**A** solide, **B** bonne, **C** indicative, **D**
 fragile) repose sur quatre constats, du plus important au moins :
 
 1. **l'indépendance prime sur le nombre** — deux échantillons espacés de dix
@@ -345,7 +311,7 @@ répétition dans le temps la donne.
 L'indice se lit à trois niveaux :
 
 - **par case**, sur l'étape Polaires : la **taille des points** du tracé
-  suit désormais la confiance et non le simple effectif, et les exports
+  suit la confiance et non le simple effectif, et les exports
   `.csv` portent les colonnes *confiance, niveau, moments indépendants,
   sorties, dispersion* ;
 - **par passe**, colonne *Confiance* de l'Entrepôt : une passe se juge sur
@@ -377,7 +343,7 @@ pré-positionnement de case, pas une censure — un clic la réintègre.
 
 **Tout inclure / tout exclure** : une case d'ensemble sous le tableau des
 passes bascule les trente d'un coup, avec le compte des passes incluses à
-côté. Trier case par case était un travail de copiste, et l'on veut souvent
+côté. Trier case par case serait un travail de copiste, et l'on veut souvent
 repartir de zéro pour n'en garder que quelques-unes.
 
 **Écrêtage par la dérivée** (dans la page Polaire max, désactivé par
@@ -416,10 +382,10 @@ est, sans quoi chaque cran chasserait de l'écran ce qu'on cherchait
 justement à regarder de plus près.
 
 C'est bien le *cadre du tracé* qui grandit dans la fenêtre, pas l'échelle
-des vitesses. Une première version resserrait le rayon — techniquement plus
-simple, mais cela ne grossit ni les graduations ni l'écart entre deux cases
-voisines au près, qui est précisément ce qu'on veut lire de plus près. Ici
-tout grossit ensemble et ce qui déborde est rogné, exactement comme une
+des vitesses. Resserrer le rayon aurait été techniquement plus simple, mais
+cela ne grossirait ni les graduations ni l'écart entre deux cases voisines
+au près, qui est précisément ce qu'on veut lire de plus près. Ici tout
+grossit ensemble et ce qui déborde est rogné, exactement comme une
 photo qu'on agrandit. Le zoom **survit à un retracé** : cocher une
 configuration ne vous rejette pas à la vue de départ. Et l'on ne peut pas
 perdre le dessin hors de l'écran — le déplacement est borné.
@@ -521,7 +487,7 @@ voilure** (« pour ce cap et ce vent, portez ça »), consultable case par
 case ou via le petit chercheur *Quelle voilure ?*. La page est bâtie pour
 **tenir dans la fenêtre** : les exports occupent un pied de page sur toute
 la largeur, les options et la recherche sont ancrées au bas de la colonne
-de gauche — Tk sert les bords avant le centre, rien ne peut donc plus être
+de gauche — Tk sert les bords avant le centre, rien ne peut donc être
 repoussé hors du cadre. Seule la liste des configurations, dont la hauteur
 dépend de votre bateau, se donne une barre de défilement, et seulement
 au-delà d'une dizaine d'entrées. Sur ce bateau — un
@@ -581,11 +547,8 @@ comme source de la grandeur, l'ancienne devenant automatiquement le repli. La
 colonne *Source* rappelle qui fait foi. Voir ce que porte une voie et la
 choisir sont ainsi le même geste. Ce que vous désignez est retenu **par
 voie**, pas par le nom que vous lui avez donné : renommer un équipement ne
-peut plus faire disparaître le choix (auparavant, une seule frappe dans un
-champ de nom remettait toutes les sources sur *Automatique* pendant que le
-tableau continuait d'afficher « principale » — deux écrans qui se
-contredisaient). Le choix de la **vitesse fond** tranche désormais lui aussi
-pour de bon : avec deux GPS à bord, c'est bien la voie désignée qui alimente
+fait pas disparaître le choix. Le choix de la **vitesse fond** tranche lui
+aussi pour de bon : avec deux GPS à bord, c'est bien la voie désignée qui alimente
 la mesure, et non la dernière arrivée.
 
 **Ce qu'une voie « apporte » se lit en deux temps** : d'abord la trame
@@ -593,15 +556,14 @@ elle-même, puis ce qu'elle alimente — `[polaire : vent apparent]`,
 `[fiche : pression, humidité…]`, ou les deux. Une trame qui n'entre dans
 aucune polaire n'est pas perdue pour autant : la température des XDR ou la
 pression de la station remplissent la fiche d'une minute archivée, et le
-tableau le dit désormais au lieu d'annoncer « non exploitée ». Si vous
+tableau le dit, au lieu d'annoncer « non exploitée ». Si vous
 tentez d'en désigner une comme source, le refus vous rappelle où elle
 *est* utilisée.
 
 **La station météo du bord (`$PEUMA`).** Les trames **propriétaires** (celles
 qui commencent par `$P`) portent le nom du constructeur et non un code
-normalisé : elles s'affichaient sous un nom tronqué incompréhensible
-(`UMA`). Elles gardent maintenant leur nom entier, et celle de ce bateau est
-entièrement décodée :
+normalisé ; elles sont affichées sous leur nom entier, et celle de la
+station météo de ce bateau est entièrement décodée :
 
 - **pression** au niveau de la station **et** réduite au niveau de la mer —
   sur cette installation, c'est la **seule** source de pression du bord
@@ -625,7 +587,7 @@ entièrement décodée :
   pas). En revanche il **arbitre la force du vent** — c'est lui qui a permis
   de confondre la girouette mal étalonnée de ce bateau. Il apparaît pour
   cela dans *Comparaison des girouettes*, au suivi en direct, qui s'affiche
-  désormais **même avec une seule girouette** dès lors que la station est là,
+  **même avec une seule girouette** dès lors que la station est là,
   et signale toute girouette qui s'écarte de plus de 25 % de sa mesure.
 
 Toutes ces grandeurs sont proposées dans la fiche d'une minute archivée
@@ -634,14 +596,14 @@ dans un tampon réel — sont écartées entières : une trame propriétaire n'a
 aucun marqueur de champ, une troncature y décalerait silencieusement tout le
 contenu et une pression deviendrait une vitesse.
 
-**Une source désignée qui n'apporte rien ne peut plus éteindre la mesure.**
-C'est le piège que ce bateau a rencontré, et il vaut d'être expliqué : une
-voie qui n'émet que du `MWV,ref='T'` (une direction de vent par rapport au
-nord, que l'application refuse à dessein) **parle** du vent sans jamais en
-**donner**. Désignée comme source du vent, elle remportait l'arbitrage à
-chaque trame ; la vraie girouette était écartée en silence, le cadran restait
-vide et plus aucun échantillon n'était produit — sans le moindre message.
-Deux règles corrigent cela définitivement : une voie ne compte comme source
+**Une source désignée qui n'apporte rien ne peut pas éteindre la mesure.**
+C'est un piège réel, et il vaut d'être expliqué : une voie qui n'émet que du
+`MWV,ref='T'` (une direction de vent par rapport au nord, que l'application
+refuse à dessein) **parle** du vent sans jamais en **donner**. Désignée
+naïvement comme source du vent, elle remporterait l'arbitrage à chaque
+trame ; la vraie girouette serait écartée en silence, le cadran resterait
+vide et plus aucun échantillon ne serait produit — sans le moindre message.
+Deux règles l'empêchent : une voie ne compte comme source
 d'une grandeur que si elle **fournit réellement** cette grandeur, et une
 source désignée qui n'a **jamais rien fourni** est ignorée (voie débranchée,
 renommée, réglage importé d'une autre installation) plutôt que d'éteindre la
@@ -704,27 +666,7 @@ l'automatique reste en clair.
 
 ---
 
-## 6. Vérifier que tout fonctionne (facultatif)
-
-Avec les fichiers de test dans le même dossier :
-
-```powershell
-python test_allure_engine.py
-python test_allure_buffer.py
-python test_allure_compat.py
-```
-
-Chacun doit se terminer par `=== TOUS LES TESTS PASSENT ... ===`.
-
-Les deux autres (`test_allure.py`, `test_allure_live.py`) ouvrent de
-vraies fenêtres et occupent des ports réseau : lancez-les seulement si vous
-voulez tout vérifier, et laissez-les aller au bout sans toucher à la souris.
-`test_allure.py` a de plus besoin d'une capture NMEA `capture.log` à côté
-des fichiers (non fournie, voir § 2).
-
----
-
-## 7. En cas de souci
+## 6. En cas de souci
 
 **« No module named tkinter »** — Python a été installé sans tcl/tk.
 Relancez l'installateur, choisissez *Modify*, et cochez `tcl/tk and IDLE`.
@@ -739,23 +681,22 @@ les voies UDP actives ont les bons numéros de port, et que le pare-feu
 Windows autorise Python à recevoir sur le réseau local.
 
 **Le démarrage est long (une invite de commande, puis rien pendant de
-longues secondes, voire des minutes).** Depuis la v2.0a, le démarrage est
-chronométré et **annoncé** : la console affiche chaque phase, et
+longues secondes, voire des minutes).** Le démarrage est chronométré et
+**annoncé** : la console affiche chaque phase, et
 `journaux/demarrage.log` garde le détail du dernier lancement (aussi résumé
 dans ⚙ → *Sauvegardes* → *Diagnostic de l'installation*). Lisez-le : si
 l'essentiel du temps part dans « bibliothèques », le coupable est **avant**
 la première ligne d'Allure — soit le premier import de matplotlib après une
 installation/mise à jour (son cache de polices se reconstruit, une fois),
 soit l'**antivirus** qui inspecte les centaines de fichiers de
-matplotlib/numpy à chaque lancement : ajoutez le dossier de Python (ou
-`Allure.exe`) aux exclusions de l'antivirus, le démarrage redevient court.
+matplotlib/numpy à chaque lancement : ajoutez le dossier de Python aux
+exclusions de l'antivirus, le démarrage redevient court.
 Les phases propres à Allure (données, interface, réseau) se comptent en
-secondes même avec un entrepôt fourni — et l'ouverture de l'Entrepôt ne
-recalcule plus tout en double comme avant.
+secondes, même avec un entrepôt fourni.
 
 **Un changement d'heure à bord (fuseau, heure d'hiver, remise à l'heure).**
 C'est un événement normal sur un bateau qui traverse des fuseaux, et Allure
-l'encaisse désormais sans rien perdre. Ce qui se passe exactement quand
+l'encaisse sans rien perdre. Ce qui se passe exactement quand
 l'horloge **recule** :
 
 - une prise en cours **continue** : le saut est détecté, les fenêtres de
@@ -766,11 +707,11 @@ l'horloge **recule** :
 - le **rejeu d'un journal** (traitement de session, import, recalcul) sait
   distinguer un recul d'une ou deux heures (changement d'heure : les
   instants sont gardés tels qu'écrits) d'un passage de minuit (recul de
-  presque 24 h : un jour est ajouté) — les versions antérieures confondaient
-  les deux, et tout ce qui suivait le changement partait 23 h dans le futur,
-  hors de toute annotation : c'était la perte de données ;
+  presque 24 h : un jour est ajouté) — confondre les deux enverrait tout ce
+  qui suit le changement 23 h dans le futur, hors de toute annotation,
+  c'est-à-dire à la perte ;
 - le **tampon glissant** ne purge jamais au-delà de ce que les données
-  racontent : même une horloge avancée par erreur de dix jours ne peut plus
+  racontent : même une horloge avancée par erreur de dix jours ne peut pas
   lui faire supprimer les dernières 48 h de flux enregistré ;
 - les **tendances** (page 📈) jettent les mesures horodatées « dans le
   futur » plutôt que de les mélanger aux fenêtres — on perd au pire une
@@ -823,7 +764,7 @@ pouvez le réimporter après avoir corrigé le réglage.
 
 ---
 
-## 8. Licence
+## 7. Licence
 
 Allure est un **logiciel libre**, distribué sous la licence
 **GNU General Public License, version 3 ou ultérieure** (GPL-3.0-or-later).
