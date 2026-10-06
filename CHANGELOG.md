@@ -23,6 +23,71 @@ relit toujours les données de n'importe quelle version antérieure.
 
 ---
 
+## 2.1a
+
+L'étape Polaires change de visage : elle affiche désormais **directement la
+polaire max**, et le tracé y a enfin toute la place. Avec beaucoup de
+configurations, l'ancienne page empilait sous le cercle la liste
+« C1 = … », le guide de voilure et la légende des vents — et la polaire se
+réduisait jusqu'à devenir illisible.
+
+### Modifié
+
+- **L'étape Polaires est la polaire max.** Pour chaque case cap/vent, la
+  meilleure vitesse parmi les configurations cochées l'emporte. Une seule
+  cochée — un double-clic dans la liste suffit — et c'est sa polaire à
+  elle : l'ancien affichage par configuration (menu déroulant) et la
+  fenêtre séparée « Polaire max (routage)… » disparaissent, tout se fait au
+  même endroit.
+- **Le tracé garde toute la hauteur**, quel que soit le nombre de
+  configurations. Leur liste vit dans la colonne de gauche, avec sa propre
+  barre de défilement ; la légende des vents passe à droite du cercle ; le
+  guide de voilure s'affiche à la place du tracé (boutons *Polaire* /
+  *Guide de voilure*), et non plus dessous.
+- **Codes de configuration stables.** C1, C2… sont affichés dans la liste
+  et ne changent plus quand on coche ou décoche : décocher C2 ne renomme
+  plus C3. Le guide, l'infobulle, la recherche et la fiche d'un point
+  emploient les mêmes codes. (C'est le rang de la configuration dans
+  l'entrepôt, la plus fournie d'abord : ajouter, inclure ou exclure une
+  passe peut encore les renuméroter.)
+- **Exports.** Les boutons « .pol / .csv (configuration sélectionnée) »
+  disparaissent : pour une seule voilure, cochez-la seule et utilisez les
+  exports du pied de page, qui proposent alors son nom de fichier. Le
+  `.pol` est dans ce cas, comme pour la polaire max, une **grille pleine** :
+  trous bouchés si l'option est cochée (elle l'est d'office), 0 dans les
+  cases jamais mesurées — là où l'ancien export les laissait vides.
+  « .csv (toutes les configurations) » devient « .csv (une polaire par
+  configuration) », à droite du pied de page, avec son indice de confiance.
+- La **taille des points** suit l'indice de confiance (celui de la
+  configuration gagnante de la case), et la **maturité** d'une
+  configuration s'affiche en tête de page quand elle est seule cochée —
+  ce qu'offrait l'ancien affichage par configuration.
+- La page suit l'entrepôt : inclure ou exclure une passe, importer,
+  recalculer ou restaurer met la liste et le tracé à jour. L'ancienne
+  fenêtre gardait la table de son ouverture.
+
+### Ajouté
+
+- **Masquer un vent** : un clic sur une valeur de la légende masque sa
+  courbe, un second la rend. L'échelle ne bouge pas.
+- Boutons *Tout cocher* / *Tout décocher* pour les configurations.
+- `installer_dependances.bat` : installe pour la commande `python` (et
+  affiche son chemin), vérifie tkinter, installe matplotlib (et pystray +
+  pillow, facultatifs), fait le bilan.
+- `construire_exe.bat` : construit `Allure.exe`, autonome, avec l'icône
+  d'Allure (disque bleu, voile blanche), à côté de `allure.py` dont il
+  partage les données.
+- L'icône d'Allure sur la fenêtre et dans la barre des tâches, au lieu de
+  la plume de Tk.
+- README : section *Installation hors ligne* (installer matplotlib ou
+  PyInstaller sans internet à bord).
+- `.gitignore` : les dossiers de données propres à chaque poste, les
+  fichiers laissés par les versions antérieures et ceux de la construction
+  de l'exe ne sont plus proposés au versionnage ; `.gitattributes` : les
+  `.bat` sont toujours livrés en fins de ligne Windows.
+
+---
+
 ## 2.0b
 
 Le tri de l'entrepôt était **bien** appliqué au calcul — polaires,

@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.pyc
+
+# Construction de l'exe (construire_exe.bat)
+build/
+Allure.exe
+*.spec
+
+# Donnees creees par Allure a cote de lui -- propres a chaque poste,
+# jamais versionnees
+donnees/
+reglages/
+tampon/
+journaux/
+
+# Versions anterieures : fichiers laisses a la racine quand la migration
+# n'a pas pu les ranger (voir allure_config._migrate_legacy_files)
+/polar_*.json
+/polar_session_*.log
+/nmea_buffer/

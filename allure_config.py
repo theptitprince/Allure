@@ -98,7 +98,7 @@ APP_CREDIT = "ETDEL 2026"
 # visage (nouvelle etape, nouveau format, refonte) ; la lettre suffit pour
 # une correction ou un ajustement. Chaque livraison a son entree dans
 # CHANGELOG.md, a la racine du depot.
-APP_VERSION = "2.0b"
+APP_VERSION = "2.1a"
 
 # =========================================================================
 # Ou vivent les fichiers
@@ -271,35 +271,6 @@ def default_config():
         # grand-voile a deux ris ou un solent de gros temps.
         # {code Allure: valeur TimeZero} ; un code absent est ignore.
         "timezero_sail_map": {},
-
-        # --- Page Statistiques ---
-        # Grandeurs AFFICHEES sur la page (cles de allure_engine.TREND_FIELDS).
-        # Le catalogue complet est volontairement plus large que ce choix par
-        # defaut : tout afficher noyait l'essentiel -- on choisit ici, dans
-        # les Parametres, ce qui merite l'ecran. Une cle inconnue de la
-        # version qui relit ce fichier est simplement ignoree a l'affichage.
-        "stats_fields": ["tws", "aws", "twa", "awa", "stw", "sog", "pressure"],
-        # Tableau par tranches (facon table de prevision) : affiche ou non.
-        "stats_show_grid": True,
-        # Les quatre fenetres de moyenne glissante, en SECONDES, de la plus
-        # courte a la plus longue. Quatre, parce que c'est ce qu'une colonne
-        # de tableau lisible d'un coup d'oeil peut porter -- et parce que la
-        # question posee en mer ("le vent forcit-il ?") se lit dans la
-        # comparaison de quelques echelles, pas dans une collection.
-        "stats_windows": [300, 600, 1800, 3600],
-        # Profondeur d'historique tenue en memoire, en heures : elle borne a
-        # la fois la plus longue moyenne possible et l'etendue des courbes.
-        # 6 h suffit largement pour une tendance barometrique, tout en
-        # gardant l'empreinte memoire negligeable.
-        "stats_history_h": 6,
-        # Tableau facon Windguru : largeur d'une colonne (minutes) et nombre
-        # de colonnes affichees.
-        "stats_grid_step_min": 30,
-        "stats_grid_cols": 12,
-        # Etendue des courbes (heures) et nombre d'heures pleines affichees
-        # dans la distance parcourue.
-        "stats_curve_h": 6,
-        "stats_hours_shown": 12,
 
         "default_recording_duration_min": 60,
 
@@ -483,56 +454,6 @@ def fixup(cfg):
     out["timezero_sail_map"] = ({str(k): str(v) for k, v in tzmap.items()
                                   if isinstance(k, str) and isinstance(v, str) and v}
                                  if isinstance(tzmap, dict) else {})
-
-    # Statistiques : grandeurs affichees -- liste de cles texte, dedoublonnee.
-    # La validite des cles est jugee a l'AFFICHAGE (allure croise avec le
-    # catalogue de allure_engine) : ce module ne doit dependre d'aucun autre,
-    # et une cle venue d'une version plus recente ne doit pas etre perdue.
-    fields = cfg.get("stats_fields")
-    if isinstance(fields, (list, tuple)):
-        clean = []
-        for k in fields:
-            if isinstance(k, str) and k.strip() and k.strip() not in clean:
-                clean.append(k.strip())
-        out["stats_fields"] = clean[:32] or list(d["stats_fields"])
-    else:
-        out["stats_fields"] = list(d["stats_fields"])
-    out["stats_show_grid"] = bool(cfg.get("stats_show_grid", d["stats_show_grid"]))
-
-    # Statistiques : quatre fenetres, bornees a 1 min / 12 h, DEDOUBLONNEES
-    # et triees. Deux colonnes identiques ne diraient rien de plus, et une
-    # liste dans le desordre ferait lire une tendance a l'envers.
-    wins = cfg.get("stats_windows")
-    seen = []
-    if isinstance(wins, (list, tuple)):
-        for w in wins:
-            try:
-                v = int(float(w))
-            except (TypeError, ValueError):
-                continue
-            v = max(60, min(43200, v))
-            if v not in seen:
-                seen.append(v)
-    out["stats_windows"] = sorted(seen)[:4] if seen else list(d["stats_windows"])
-    while len(out["stats_windows"]) < 4:
-        # Complete avec les valeurs par defaut manquantes : le tableau a
-        # quatre colonnes, il en faut quatre.
-        for cand in d["stats_windows"]:
-            if cand not in out["stats_windows"]:
-                out["stats_windows"].append(cand)
-                break
-        else:
-            out["stats_windows"].append(out["stats_windows"][-1] * 2)
-        out["stats_windows"] = sorted(set(out["stats_windows"]))
-    out["stats_history_h"] = int(_clamp(cfg.get("stats_history_h"), 1, 48,
-                                         d["stats_history_h"]))
-    out["stats_grid_step_min"] = int(_clamp(cfg.get("stats_grid_step_min"), 1, 180,
-                                             d["stats_grid_step_min"]))
-    out["stats_grid_cols"] = int(_clamp(cfg.get("stats_grid_cols"), 3, 48,
-                                         d["stats_grid_cols"]))
-    out["stats_curve_h"] = int(_clamp(cfg.get("stats_curve_h"), 1, 48, d["stats_curve_h"]))
-    out["stats_hours_shown"] = int(_clamp(cfg.get("stats_hours_shown"), 2, 48,
-                                           d["stats_hours_shown"]))
 
     out["default_recording_duration_min"] = int(_clamp(
         cfg.get("default_recording_duration_min"), 1, 1440, d["default_recording_duration_min"]))

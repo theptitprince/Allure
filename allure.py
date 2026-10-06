@@ -32,8 +32,10 @@ Organisation de l'interface :
        durablement (polar_store.json, jamais ecrase) ; interrogation des
        archives par date/heure, correction a posteriori d'une annotation,
        corbeille.
-    3. POLAIRES : trace (automatique, recalcule des qu'on arrive sur
-       l'etape ou qu'on change de configuration) + export .pol / .csv.
+    3. POLAIRES : la polaire max (meilleure vitesse par case parmi les
+       configurations cochees -- une seule cochee, c'est sa polaire),
+       tracee automatiquement, guide de voilure, exports .pol / .csv /
+       TimeZero.
 
 - Les PARAMETRES s'ouvrent par la roue dentee en haut a droite : une page
   qui remplace le contenu courant, organisee par categories (bandeau de
@@ -41,7 +43,7 @@ Organisation de l'interface :
   tampon glissant, table polaire, sauvegardes. "Enregistrer" ramene a
   l'etape d'ou l'on venait.
 
-Prerequis -- UNE SEULE commande :
+Prerequis -- UNE SEULE commande (ou installer_dependances.bat) :
     python -m pip install matplotlib
 
 Fichiers necessaires, tous dans le MEME dossier :
@@ -58,7 +60,6 @@ Allure -- ETDEL 2026
 
 import math
 import os
-import re
 import socket
 import sys
 import threading
@@ -115,7 +116,7 @@ if sys.stdout is not None:
 import matplotlib
 matplotlib.use("TkAgg")
 from matplotlib.figure import Figure
-from matplotlib.ticker import MaxNLocator
+from matplotlib.lines import Line2D
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 _boot_phase("bibliotheques chargees (matplotlib, tkinter)")
 
@@ -779,206 +780,6 @@ def _draw_wind_arrow(canvas, cx, cy, r, wind_from_deg, speed_frac, color,
 
 
 # =========================================================================
-# Statistiques -- petits composants et formatages (voir
-# App._build_step_statistiques). Regroupes ici, au niveau du module, parce
-# qu'ils ne dependent d'aucun etat de l'application : ils se testent seuls.
-# =========================================================================
-
-def _fmt_span(seconds):
-    """Duree en toutes lettres courtes : "45 s", "5 min", "1 h 30", "2 h"."""
-    try:
-        s = float(seconds)
-    except (TypeError, ValueError):
-        return "?"
-    if s < 0:
-        s = 0.0
-    if s < 90:
-        return f"{s:.0f} s"
-    minutes = s / 60.0
-    if minutes < 60:
-        return f"{minutes:.0f} min"
-    hours = int(minutes // 60)
-    rest = int(round(minutes - hours * 60))
-    if rest >= 60:      # arrondi qui deborde (119,7 min -> 2 h, pas 1 h 60)
-        hours += 1
-        rest = 0
-    return f"{hours} h" if rest == 0 else f"{hours} h {rest:02d}"
-
-
-def _parse_span(text):
-    """Inverse de _fmt_span, pour relire ce qu'un menu deroulant affiche.
-    None si la chaine n'est pas une duree."""
-    if not isinstance(text, str):
-        return None
-    # L'espace insecable est celui que produisent certaines polices/
-    # locales dans "5 min" : sans cette normalisation, le menu
-    # deroulant se relirait comme une chaine inconnue.
-    t = text.strip().lower().replace("\u00a0", " ")
-    m = re.match(r"^(\d+)\s*h(?:\s*(\d+))?$", t)
-    if m:
-        return int(m.group(1)) * 3600 + int(m.group(2) or 0) * 60
-    m = re.match(r"^(\d+)\s*min$", t)
-    if m:
-        return int(m.group(1)) * 60
-    m = re.match(r"^(\d+)\s*s$", t)
-    if m:
-        return int(m.group(1))
-    return None
-
-
-def _fmt_measure(value, kind, decimals):
-    """Valeur formatee pour une case de tableau. Les angles bord-relatifs
-    gardent leur SIGNE (babord/tribord), les releves absolus sont ecrits sur
-    trois chiffres comme un cap."""
-    if value is None:
-        return "--"
-    if kind == "angle_rel":
-        return f"{value:+.0f}"
-    if kind == "angle_abs":
-        return f"{value % 360.0:03.0f}"
-    return f"{value:.{decimals}f}"
-
-
-# Variation horaire au-dela de laquelle une tendance merite d'etre signalee,
-# par grandeur. En dessous, la pente n'est que du bruit de mesure : afficher
-# une fleche pour 0,1 hPa/h ferait croire a un evenement.
-_TREND_THRESHOLDS = {
-    "tws": 1.0, "aws": 1.0, "wind_gust_kn": 1.5,
-    "stw": 0.3, "sog": 0.3,
-    "pressure": 0.5, "air_temp": 0.5, "water_temp": 0.5, "humidity": 3.0,
-    "depth": 2.0,
-}
-# Grandeurs dont la HAUSSE merite l'oeil, et celles dont c'est la BAISSE.
-# Le barometre est le seul a l'envers -- et c'est justement celui qu'on
-# regarde pour cette raison.
-_TREND_WATCH_UP = ("tws", "aws", "wind_gust_kn")
-_TREND_WATCH_DOWN = ("pressure",)
-
-
-def _trend_arrow(key, slope_per_h, _unit):
-    """(fleche, couleur) resumant une pente horaire."""
-    thr = _TREND_THRESHOLDS.get(key, 0.5)
-    if abs(slope_per_h) < thr:
-        return "→", FG_LABEL_DIM
-    up = slope_per_h > 0
-    watched = (up and key in _TREND_WATCH_UP) or (not up and key in _TREND_WATCH_DOWN)
-    return ("↗" if up else "↘"), (COLOR_ACCENT if watched else FG_LABEL)
-
-
-# Echelle de couleur du vent : les paliers habituels des tables meteo, en
-# noeuds. Deux jeux, un par theme -- une case pastel concue pour le jour
-# devient aveuglante sur fond sombre, et le texte y disparait.
-WIND_SCALE_KN = (5, 10, 15, 20, 25, 30, 35, 40)
-_WIND_COLORS_CLAIR = ("#e4edf5", "#d5ecdc", "#e0efb8", "#f7ecab", "#f9d491",
-                      "#f5b587", "#ef9270", "#e46f6f", "#c9524f")
-_WIND_COLORS_SOMBRE = ("#26313f", "#25402f", "#37461f", "#4c4620", "#55411f",
-                       "#5c3820", "#612f27", "#65262c", "#70202a")
-
-
-def _wind_cell_colors(kn):
-    """(fond, encre) d'une case du tableau, selon la force du vent."""
-    idx = 0
-    for i, limit in enumerate(WIND_SCALE_KN):
-        if kn >= limit:
-            idx = i + 1
-    if ACTIVE_THEME == "sombre":
-        return _WIND_COLORS_SOMBRE[idx], "#e6ecf2"
-    return _WIND_COLORS_CLAIR[idx], "#1c2733"
-
-
-# Angles qui designent une DESTINATION (la route suivie) et non une
-# provenance. La distinction n'est pas cosmetique : dessiner une route fond
-# comme un vent la ferait lire a 180 degres de la verite.
-_TREND_ANGLE_TOWARD = ("cog", "heading")
-
-
-def _draw_mini_arrow(canvas, deg, color, toward=False):
-    """Fleche de direction dans une case de tableau. MEME convention que le
-    cadran du suivi en direct : pour un VENT, elle montre ou il va en
-    partant du cote d'ou il vient -- un vent de face pointe donc vers le
-    bas. toward=True inverse ce sens pour les angles qui designent deja une
-    destination (la route fond).
-
-    Le repere (etrave en haut pour un angle bord-relatif, nord en haut pour
-    un releve absolu) n'est pas dessine : a cette taille il ferait une tache,
-    et l'intitule de la ligne le dit deja."""
-    canvas.delete("all")
-    if deg is None:
-        return
-    if toward:
-        deg = float(deg) + 180.0
-    w = int(canvas.cget("width"))
-    h = int(canvas.cget("height"))
-    cx, cy = w / 2.0, h / 2.0
-    r = min(w, h) / 2.0 - 2.0
-    ang = math.radians(90.0 - float(deg))
-    cos_a, sin_a = math.cos(ang), math.sin(ang)
-    tail = (cx + r * cos_a, cy - r * sin_a)          # d'ou vient le vent
-    tip = (cx - r * cos_a, cy + r * sin_a)           # ou il va
-    neck = (cx - (r * 0.15) * cos_a, cy + (r * 0.15) * sin_a)
-    px, py = sin_a, cos_a
-    canvas.create_line(tail[0], tail[1], neck[0], neck[1], fill=color, width=2,
-                       capstyle="round")
-    canvas.create_polygon(tip[0], tip[1],
-                          neck[0] + px * 3.2, neck[1] + py * 3.2,
-                          neck[0] - px * 3.2, neck[1] - py * 3.2,
-                          fill=color, outline="")
-
-
-class StatCell(tk.Frame):
-    """Case de tableau statistique : une valeur, une precision facultative
-    en petit dessous, et pour une grandeur angulaire une fleche a gauche.
-
-    compact=True supprime la ligne de precision : c'est la forme du tableau
-    par tranches, ou vingt colonnes doivent tenir dans une largeur d'ecran."""
-
-    def __init__(self, master, arrow=False, compact=False, toward=False):
-        super().__init__(master, bg=BG_PANEL, relief="solid", bd=1)
-        self._arrow = bool(arrow)
-        self._toward = bool(toward)
-        self.canvas = None
-        if self._arrow:
-            size = 16 if compact else 20
-            self.canvas = tk.Canvas(self, width=size, height=size, bg=BG_PANEL,
-                                     highlightthickness=0)
-            self.canvas.pack(side="left", padx=(2, 0), pady=1)
-        box = tk.Frame(self, bg=BG_PANEL)
-        box.pack(side="left", fill="both", expand=True)
-        self.main = tk.Label(box, text="--", bg=BG_PANEL, fg=FG_DIGIT,
-                              font=("Consolas", 10 if compact else 11, "bold"))
-        self.main.pack(fill="x")
-        self.sub = None
-        if not compact:
-            self.sub = tk.Label(box, text="", bg=BG_PANEL, fg=FG_LABEL_DIM,
-                                 font=("Segoe UI", 7))
-            self.sub.pack(fill="x")
-
-    def _paint(self, bg):
-        self.configure(bg=bg)
-        for w in (self.main, self.sub, self.canvas, self.main.master):
-            if w is not None:
-                w.configure(bg=bg)
-
-    def set_empty(self):
-        self._paint(BG_PANEL)
-        self.main.configure(text="--", fg=FG_LABEL_DIM)
-        if self.sub is not None:
-            self.sub.configure(text="", fg=FG_LABEL_DIM)
-        if self.canvas is not None:
-            _draw_mini_arrow(self.canvas, None, FG_LABEL_DIM, self._toward)
-
-    def set_value(self, main, sub="", angle=None, stale=False, bg=None, fg=None):
-        bg = BG_PANEL if bg is None else bg
-        self._paint(bg)
-        ink = fg if fg is not None else (FG_LABEL_DIM if stale else FG_DIGIT)
-        self.main.configure(text=main, fg=ink)
-        if self.sub is not None:
-            self.sub.configure(text=sub, fg=FG_LABEL_DIM)
-        if self.canvas is not None:
-            _draw_mini_arrow(self.canvas, angle, ink, self._toward)
-
-
-# =========================================================================
 # Application
 # =========================================================================
 
@@ -986,6 +787,18 @@ class App(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title(f"{pcfg.APP_NAME} v{pcfg.APP_VERSION} — {pcfg.APP_TAGLINE}")
+        # Le logo d'Allure (disque bleu, voile blanche) en icone de fenetre
+        # et de barre des taches : sans cela Tk affiche sa plume -- y compris
+        # sur Allure.exe, dont l'icone de fichier ne s'applique pas a la
+        # fenetre. Meme dessin que la zone de notification et que l'exe
+        # (voir allure_config.app_icon_png).
+        try:
+            import base64
+            self._app_icons = [tk.PhotoImage(data=base64.b64encode(pcfg.app_icon_png(s)))
+                               for s in (64, 32)]
+            self.iconphoto(True, *self._app_icons)
+        except tk.TclError:
+            pass
         self.configure(bg=BG_APP)
         self.minsize(1040, 700)
         self.geometry("1240x800")
@@ -1013,17 +826,6 @@ class App(tk.Tk):
 
         self._engine_lock = threading.Lock()
         self.engine = None
-        # Enregistreur de tendances (page Statistiques) -- il appartient a
-        # l'APPLICATION et non au moteur : chaque prise fabrique un moteur
-        # neuf, alors que la meteo, elle, ne recommence pas a chaque bouton
-        # "Demarrer". Voir allure_engine.TrendRecorder et _backfill_trend.
-        self.trend = pe.TrendRecorder(
-            horizon_s=self.config_data.get("stats_history_h", 6) * 3600.0)
-        self._trend_backfill_state = "jamais"   # jamais / en cours / fait / echec
-        self._trend_backfill_msg = ""
-        self._trend_backfill_thread = None
-        self._trend_backfill_result = None
-        self._trend_backfill_lock = threading.Lock()
         # "live" ou "import" -- non plus un mode dans lequel l'utilisateur
         # bascule, mais la nature du traitement en cours, posee
         # explicitement par _process_session et lue par les quelques
@@ -1142,12 +944,6 @@ class App(tk.Tk):
         self._refresh_tick()
         _boot_phase("voies reseau ouvertes, fenetre prete a s'afficher")
         self._write_boot_log()
-        # Relecture du tampon pour les statistiques, quelques secondes apres
-        # l'ouverture : en tache de fond, et volontairement PAS pendant le
-        # demarrage -- l'application doit s'afficher tout de suite, et
-        # personne ne consulte des tendances dans la premiere seconde.
-        self._trend_backfill_after_id = self.after(
-            4000, lambda: self._start_trend_backfill(auto=True))
 
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
@@ -1171,9 +967,6 @@ class App(tk.Tk):
             # explicitement demarree produit des echantillons.
             self.engine.collecting = bool(self.recording_active)
             self.engine.maneuver_watch = self._make_maneuver_watch(cfg)
-            # Les statistiques survivent au renouvellement du moteur : c'est
-            # le meme enregistreur qu'on rebranche, jamais un neuf.
-            self.engine.trend = self.trend
 
     def _make_maneuver_watch(self, cfg):
         """Guetteur d'arret automatique regle selon la config -- ou None si
@@ -1225,20 +1018,17 @@ class App(tk.Tk):
         self.tab_acquisition = tk.Frame(self.content_area, bg=BG_APP)
         self.tab_entrepot = tk.Frame(self.content_area, bg=BG_APP)
         self.tab_polaires = tk.Frame(self.content_area, bg=BG_APP)
-        self.tab_statistiques = tk.Frame(self.content_area, bg=BG_APP)
         self._step_frames = {
             "parametres": self.tab_parametres,
             "acquisition": self.tab_acquisition,
             "entrepot": self.tab_entrepot,
             "polaires": self.tab_polaires,
-            "statistiques": self.tab_statistiques,
         }
 
         self._build_step_parametres(self.tab_parametres)
         self._build_step_acquisition(self.tab_acquisition)
         self._build_step_entrepot(self.tab_entrepot)
         self._build_step_polaires(self.tab_polaires)
-        self._build_step_statistiques(self.tab_statistiques)
 
         self._current_step = None
         # Etape d'ou les Parametres ont ete ouverts -- "Enregistrer les
@@ -1279,18 +1069,6 @@ class App(tk.Tk):
             activeforeground=FG_DIGIT, cursor="hand2", padx=10, pady=2,
             command=lambda: self._show_step("acquisition"))
         self.live_btn.pack(side="right")
-
-        # Bouton STATISTIQUES, troisieme raccourci permanent. Il n'a pas sa
-        # place dans le bandeau des trois etapes : les statistiques ne sont
-        # pas une etape du parcours des donnees (elles ne produisent aucune
-        # polaire), elles sont une LECTURE du flux, disponible en permanence
-        # et sans rien enregistrer -- au meme titre que le suivi en direct.
-        self.stats_btn = tk.Button(
-            inner_h, text="\U0001f4c8", font=("Segoe UI Symbol", 13), relief="flat", bd=0,
-            bg=BG_HEADER, fg=FG_LABEL_DIM, activebackground=BG_NAV,
-            activeforeground=FG_DIGIT, cursor="hand2", padx=10, pady=3,
-            command=lambda: self._show_step("statistiques"))
-        self.stats_btn.pack(side="right")
 
         title_box = tk.Frame(inner_h, bg=BG_HEADER)
         title_box.pack(side="left", fill="x", expand=True)
@@ -1658,29 +1436,15 @@ class App(tk.Tk):
             # correspondance simple valeur a valeur) ; les aiguilles
             # reviennent au prochain tick de _update_instruments.
             self._live_twa_geom = _draw_twa_gauge_background(self.live_twa_canvas)
-        if hasattr(self, "polar_fig"):
-            self.polar_fig.set_facecolor(BG_APP)
-            self.polar_ax.set_facecolor(BG_PANEL)
-            self.polar_ax.tick_params(colors=FG_LABEL, labelsize=8)
-            self.polar_canvas.get_tk_widget().configure(bg=BG_APP)
-            if self._current_step == "polaires":
-                self._draw_polar(auto=True)
+        if hasattr(self, "_max_fig"):
+            self._max_fig.set_facecolor(BG_APP)
+            self._max_ax.set_facecolor(BG_PANEL)
+            self._max_canvas.get_tk_widget().configure(bg=BG_APP)
+            # Retrace complet : graduations et legende portent leurs couleurs.
+            if self._max_result is not None:
+                self._max_polar_redraw(bool(self.config_data["symmetric_port_starboard"]))
             else:
-                self.polar_canvas.draw_idle()
-        if hasattr(self, "stats_fig"):
-            self.stats_fig.set_facecolor(BG_APP)
-            self.stats_ax_wind.set_facecolor(BG_PANEL)
-            self.stats_ax_press.set_facecolor(BG_PANEL)
-            self.stats_canvas.get_tk_widget().configure(bg=BG_APP)
-            # Les cases colorees du tableau par tranches n'ont aucune
-            # correspondance dans la palette (leurs teintes sortent de
-            # l'echelle de vent) : elles sont repeintes par le
-            # rafraichissement, qu'on force ici plutot que d'attendre le
-            # prochain tick.
-            if self._current_step == "statistiques":
-                self._refresh_stats(force=True)
-            else:
-                self.stats_canvas.draw_idle()
+                self._max_canvas.draw_idle()
 
     def _theme_tick(self):
         """Controle periodique (environ une fois par minute, cadence par
@@ -1711,7 +1475,6 @@ class App(tk.Tk):
             frame.pack_forget()
         self._step_frames[key].pack(fill="both", expand=True)
         in_settings = (key == "parametres")
-        in_stats = (key == "statistiques")
         for k, btn in self._nav_buttons.items():
             active = (k == key)
             btn.configure(bg=BG_NAV_ACTIVE if active else BG_NAV,
@@ -1734,12 +1497,8 @@ class App(tk.Tk):
             self.live_btn.configure(
                 bg=BG_NAV_ACTIVE if on_live else BG_HEADER,
                 fg=FG_ON_ACCENT if on_live else FG_LABEL_DIM)
-        if hasattr(self, "stats_btn"):
-            self.stats_btn.configure(
-                bg=BG_NAV_ACTIVE if in_stats else BG_HEADER,
-                fg=FG_ON_ACCENT if in_stats else FG_LABEL_DIM)
         if hasattr(self, "_steps_row"):
-            if in_settings or in_stats:
+            if in_settings:
                 self._steps_row.pack_forget()
             elif not self._steps_row.winfo_manager():
                 self._steps_row.pack(fill="x", before=self.content_area)
@@ -1752,12 +1511,11 @@ class App(tk.Tk):
         # rester a jour meme si l'utilisateur a modifie autre chose entre
         # deux visites.
         if key == "polaires":
+            # Trace automatique : arriver sur l'etape suffit, sans bouton
+            # "Tracer" (on vient forcement ici POUR voir la polaire).
+            # Silencieux si l'entrepot est vide : un message d'accueil
+            # remplace le trace.
             self._refresh_config_choices()
-            # Trace automatique : arriver sur l'etape suffit, plus de bouton
-            # "Tracer / rafraichir" (le clic n'apportait rien -- on venait
-            # forcement ici POUR voir la polaire). Silencieux si l'entrepot
-            # est vide : un message d'accueil remplace le trace.
-            self._draw_polar(auto=True)
         elif key == "entrepot":
             self._refresh_store_size_label()
             self._refresh_sessions_list()
@@ -1766,13 +1524,6 @@ class App(tk.Tk):
             self._refresh_ports_summary()
         elif key == "parametres":
             self._refresh_buffer_state()
-        elif key == "statistiques":
-            # Premiere visite : on va chercher dans le tampon ce qui s'est
-            # passe AVANT le lancement de l'application. Sans cela, une
-            # "tendance sur 60 minutes" ouverte deux minutes apres le
-            # demarrage ne porterait que sur deux minutes.
-            self._start_trend_backfill(auto=True)
-            self._refresh_stats(force=True)
 
     # ---------------------------------------------------------------
     # Etape 2 : Enregistrement
@@ -2675,7 +2426,6 @@ class App(tk.Tk):
         ("sources", "Sources & tampon"),
         ("manoeuvre", "Manoeuvres"),
         ("traitement", "Lissage & table"),
-        ("statistiques", "Statistiques"),
         ("affichage", "Affichage & fenetre"),
         ("sauvegarde", "Sauvegardes"),
     ]
@@ -2738,7 +2488,6 @@ class App(tk.Tk):
         self._build_settings_sources(self._settings_frames["sources"])
         self._build_settings_traitement(self._settings_frames["traitement"])
         self._build_settings_manoeuvre(self._settings_frames["manoeuvre"])
-        self._build_settings_statistiques(self._settings_frames["statistiques"])
         self._build_settings_affichage(self._settings_frames["affichage"])
         self._build_settings_sauvegarde(self._settings_frames["sauvegarde"])
 
@@ -3466,150 +3215,6 @@ class App(tk.Tk):
                       "n'est prise en compte qu'au-dessus de 1,5 nd de SOG (en dessous, le "
                       "COG d'un GPS ne veut plus rien dire).", wraplength="auto")
 
-    # ---------- Categorie : statistiques ----------
-    def _build_settings_statistiques(self, parent):
-        """Tout ce que la page Statistiques affiche se regle ICI, comme le
-        reste de l'application se regle dans la roue dentee -- la page
-        elle-meme reste une page de lecture, sans menus qui l'encombrent.
-        Seule l'echelle de temps des graphes vit sur la page : c'est le seul
-        reglage qu'on tourne l'oeil sur le resultat."""
-        outer, inner = make_scrollable(parent, height=1)
-        outer.pack(fill="both", expand=True)
-
-        f_src = section(inner, "D'ou viennent les mesures")
-        note(f_src, "Les statistiques lisent les MEMES valeurs arbitrees que les cadrans du "
-                     "suivi en direct : la source de chaque grandeur (quelle voie, quels "
-                     "replis) se choisit dans Sources & tampon, et s'applique ici a "
-                     "l'identique. L'historique d'avant le lancement vient du tampon "
-                     "glissant, relu automatiquement a l'ouverture.", wraplength="auto")
-
-        f_fields = section(inner, "Grandeurs affichees")
-        note(f_fields, "Tout afficher noie l'essentiel : cochez ce qui compte pour VOTRE "
-                        "passerelle. Une grandeur cochee mais jamais recue n'occupe aucune "
-                        "ligne ; une grandeur recue mais decochee est comptee en pied de "
-                        "tableau, sans etre affichee.", wraplength="auto")
-        fields_grid = tk.Frame(f_fields, bg=BG_APP)
-        fields_grid.pack(fill="x", padx=6, pady=(0, 8))
-        chosen = set(self.config_data.get("stats_fields") or [])
-        self.stats_field_vars = {}
-        for i, (key, label, unit, _dec, _kind) in enumerate(pe.TREND_FIELDS):
-            var = tk.BooleanVar(value=key in chosen)
-            self.stats_field_vars[key] = var
-            tk.Checkbutton(fields_grid, text=f"{label} ({unit})", variable=var,
-                           bg=BG_APP, fg=FG_LABEL, activebackground=BG_APP,
-                           anchor="w").grid(row=i % 7, column=i // 7, sticky="w",
-                                             padx=(0, 24))
-
-        f_win = section(inner, "Tendances : les quatre durees")
-        note(f_win, "Les quatre fenetres de moyenne glissante du tableau des tendances, de "
-                     "la plus courte a la plus longue. Doublons refuses -- deux colonnes "
-                     "identiques ne diraient rien de plus.", wraplength="auto")
-        win_row = tk.Frame(f_win, bg=BG_APP)
-        win_row.pack(fill="x", padx=6, pady=(0, 8))
-        self.stats_window_vars = []
-        choices = [_fmt_span(s) for s in pe.TREND_WINDOW_CHOICES]
-        for w in self._stats_windows():
-            var = tk.StringVar(value=_fmt_span(w))
-            ttk.OptionMenu(win_row, var, var.get(), *choices).pack(side="left", padx=(0, 6))
-            self.stats_window_vars.append(var)
-
-        f_hist = section(inner, "Profondeur d'historique")
-        hist_row = tk.Frame(f_hist, bg=BG_APP)
-        hist_row.pack(fill="x", padx=6, pady=(0, 4))
-        tk.Label(hist_row, text="Conserver en memoire :", bg=BG_APP, fg=FG_LABEL,
-                 font=FONT_LABEL).pack(side="left")
-        self.stats_history_var = tk.StringVar(
-            value=f"{self.config_data.get('stats_history_h', 6)} h")
-        ttk.OptionMenu(hist_row, self.stats_history_var, self.stats_history_var.get(),
-                       *[f"{h} h" for h in (1, 2, 3, 6, 12, 24, 48)]).pack(
-            side="left", padx=(6, 0))
-        note(f_hist, "Borne la plus longue moyenne possible et le recul maximal des "
-                      "graphes. Au-dela, seules les distances horaires sont conservees "
-                      "(un simple total par heure).", wraplength="auto")
-
-        f_grid = section(inner, "Tableau des dernieres heures")
-        self.stats_grid_show_var = tk.BooleanVar(
-            value=self.config_data.get("stats_show_grid", True))
-        tk.Checkbutton(f_grid, text="Afficher le tableau par tranches",
-                       variable=self.stats_grid_show_var, bg=BG_APP, fg=FG_LABEL,
-                       activebackground=BG_APP, anchor="w").pack(fill="x", padx=6)
-        grid_row = tk.Frame(f_grid, bg=BG_APP)
-        grid_row.pack(fill="x", padx=6, pady=(2, 4))
-        tk.Label(grid_row, text="Pas :", bg=BG_APP, fg=FG_LABEL,
-                 font=FONT_LABEL).pack(side="left")
-        self.stats_grid_step_var = tk.StringVar(
-            value=_fmt_span(self.config_data.get("stats_grid_step_min", 30) * 60))
-        ttk.OptionMenu(grid_row, self.stats_grid_step_var, self.stats_grid_step_var.get(),
-                       *[_fmt_span(m * 60) for m in (5, 10, 15, 30, 60, 120)]).pack(
-            side="left", padx=(6, 14))
-        tk.Label(grid_row, text="Colonnes :", bg=BG_APP, fg=FG_LABEL,
-                 font=FONT_LABEL).pack(side="left")
-        self.stats_grid_cols_var = tk.StringVar(
-            value=str(self.config_data.get("stats_grid_cols", 12)))
-        ttk.OptionMenu(grid_row, self.stats_grid_cols_var, self.stats_grid_cols_var.get(),
-                       *[str(n) for n in (6, 8, 10, 12, 16, 20, 24)]).pack(
-            side="left", padx=(6, 0))
-        note(f_grid, "Ses lignes suivent les grandeurs cochees plus haut (suivre le vent "
-                      "reel amene ses rafales et sa direction). Le nombre de colonnes se "
-                      "borne tout seul a ce que la fenetre peut afficher.", wraplength="auto")
-
-        f_dist = section(inner, "Distance heure par heure")
-        dist_row = tk.Frame(f_dist, bg=BG_APP)
-        dist_row.pack(fill="x", padx=6, pady=(0, 8))
-        tk.Label(dist_row, text="Heures pleines affichees :", bg=BG_APP, fg=FG_LABEL,
-                 font=FONT_LABEL).pack(side="left")
-        self.stats_hours_shown_var = tk.StringVar(
-            value=str(self.config_data.get("stats_hours_shown", 12)))
-        ttk.OptionMenu(dist_row, self.stats_hours_shown_var,
-                       self.stats_hours_shown_var.get(),
-                       *[str(n) for n in (6, 8, 12, 18, 24, 36, 48)]).pack(
-            side="left", padx=(6, 0))
-
-    def _collect_stats_settings(self, new_cfg):
-        """Verse les reglages de la categorie Statistiques dans new_cfg --
-        appele par _save_params, au meme titre que les autres categories."""
-        fields = [k for k, var in getattr(self, "stats_field_vars", {}).items()
-                  if var.get()]
-        if fields:
-            new_cfg["stats_fields"] = [k for k in pe.TREND_KEYS if k in fields]
-        wins = []
-        for var in getattr(self, "stats_window_vars", []):
-            secs = _parse_span(var.get())
-            if secs:
-                wins.append(secs)
-        if wins:
-            new_cfg["stats_windows"] = wins
-        h = _parse_span(self.stats_history_var.get()) if hasattr(self, "stats_history_var") else None
-        if h:
-            new_cfg["stats_history_h"] = max(1, int(round(h / 3600.0)))
-        if hasattr(self, "stats_grid_show_var"):
-            new_cfg["stats_show_grid"] = bool(self.stats_grid_show_var.get())
-        step = _parse_span(self.stats_grid_step_var.get()) if hasattr(self, "stats_grid_step_var") else None
-        if step:
-            new_cfg["stats_grid_step_min"] = max(1, int(round(step / 60.0)))
-        for attr, key in (("stats_grid_cols_var", "stats_grid_cols"),
-                          ("stats_hours_shown_var", "stats_hours_shown")):
-            try:
-                new_cfg[key] = int(getattr(self, attr).get())
-            except (AttributeError, tk.TclError, ValueError):
-                pass
-
-    def _apply_stats_settings_effects(self):
-        """Fait suivre l'etat vivant apres un enregistrement des parametres :
-        horizon de l'enregistreur, menus recales sur ce que le fixup a
-        REELLEMENT retenu (dedoublonnage des durees), page rafraichie."""
-        self.trend.set_horizon(self.config_data.get("stats_history_h", 6) * 3600.0)
-        if hasattr(self, "stats_window_vars"):
-            for var, w in zip(self.stats_window_vars, self._stats_windows()):
-                var.set(_fmt_span(w))
-        if hasattr(self, "stats_field_vars"):
-            chosen = set(self.config_data.get("stats_fields") or [])
-            for key, var in self.stats_field_vars.items():
-                var.set(key in chosen)
-        if hasattr(self, "stats_state_lbl"):
-            self._sync_stats_sections()
-            self._refresh_stats(force=True)
-
     # ---------- Categorie : affichage & fenetre ----------
     def _build_settings_affichage(self, parent):
         outer, inner = make_scrollable(parent, height=1)
@@ -3949,8 +3554,6 @@ class App(tk.Tk):
             messagebox.showerror("Parametrage", "Duree de conservation du tampon invalide.")
             return
 
-        self._collect_stats_settings(new_cfg)
-
         new_cfg["archive_detail_fields"] = [
             k for k, var in getattr(self, "archive_field_vars", {}).items() if var.get()]
         try:
@@ -4081,9 +3684,6 @@ class App(tk.Tk):
             self._sync_config_vars()
         self._apply_recording_lock()
         self._refresh_ports_summary()
-        # La page Statistiques suit immediatement (grandeurs, durees,
-        # horizon, tableau montre/cache) -- comme le theme ou le tampon.
-        self._apply_stats_settings_effects()
 
         result_msg = "Parametres enregistres."
         if reanalyse:
@@ -6127,428 +5727,63 @@ class App(tk.Tk):
         self._center_on_parent(dlg)
 
     # ---------------------------------------------------------------
-    # Etape 3 : Polaires (trace + export). Le trace est AUTOMATIQUE :
-    # arriver sur l'etape, changer de configuration ou enregistrer de
-    # nouveaux parametres retrace aussitot -- l'ancien bouton "Tracer /
-    # rafraichir" n'apportait rien (on ne venait ici que pour voir la
-    # polaire). Les reglages de la table (case, symetrie, statistique)
-    # vivent dans les Parametres, categorie "Lissage & table" : ce sont des
-    # reglages qu'on fixe une fois, pas des commandes de trace.
-    # ---------------------------------------------------------------
-    def _build_step_polaires(self, parent):
-        top = tk.Frame(parent, bg=BG_APP)
-        top.pack(fill="x", padx=10, pady=(10, 4))
-
-        tk.Label(top, text="Configuration :", bg=BG_APP, fg=FG_LABEL,
-                 font=FONT_LABEL_BOLD).pack(side="left")
-        self.allure_config_var = tk.StringVar(value="")
-        self.allure_config_menu = ttk.OptionMenu(top, self.allure_config_var, "")
-        # Largeur AJUSTEE au contenu (voir _refresh_config_choices) et non
-        # figee : une configuration complete -- plusieurs voiles, plusieurs
-        # moteurs, la derive et l'effectif -- depasse largement les 32
-        # caracteres d'origine, et l'on se retrouvait a choisir entre des
-        # libelles coupes au milieu. Le menu s'etire en plus avec la
-        # fenetre, pour profiter de la place quand il y en a.
-        self.allure_config_menu.pack(side="left", fill="x", expand=True, padx=(6, 0))
-        self._refresh_polar_menu_width([])
-        # Le rappel des reglages passe SOUS la ligne : cote a cote, il
-        # disputait sa largeur au menu, et c'est le menu qui perdait.
-        tk.Label(parent, text="Reglages de la table (case, symetrie, statistique) : "
-                               "roue dentee \u2699 > Lissage & table.",
-                 bg=BG_APP, fg=FG_LABEL_DIM, font=("Segoe UI", 8),
-                 anchor="w").pack(fill="x", padx=10, pady=(0, 2))
-
-        export_row = tk.Frame(parent, bg=BG_APP)
-        export_row.pack(fill="x", padx=10, pady=(0, 2))
-        tk.Button(export_row, text="Exporter .pol (configuration selectionnee)",
-                  command=self._export_pol).pack(side="left", padx=(0, 8))
-        tk.Button(export_row, text="Exporter .csv (configuration selectionnee)",
-                  command=self._export_csv_one).pack(side="left", padx=(0, 8))
-        tk.Button(export_row, text="Exporter .csv (toutes les configurations)",
-                  command=self._export_csv_all).pack(side="left")
-        tk.Button(export_row, text="Polaire max (routage)...",
-                  command=self._open_max_polar_window,
-                  bg=COLOR_ACCENT, fg=FG_ON_ACCENT,
-                  font=FONT_LABEL_BOLD).pack(side="left", padx=(16, 0))
-
-        # Titre + legende textuelle (taille des points) affiches comme des
-        # Label Tk plutot que via ax.set_title()/un texte matplotlib : un
-        # titre matplotlib est positionne par une marge FIXE en points
-        # au-dessus des axes -- sur un canvas devenu tres court (petite
-        # fenetre), cette marge peut ne plus suffire et le titre se retrouve
-        # rogne hors de la figure (invisible). Un Label Tk, lui, est mis en
-        # page par Tk comme n'importe quel autre widget : il reste TOUJOURS
-        # visible, quelle que soit la taille de la fenetre, et c'est le
-        # graphique lui-meme (seul widget en fill="both", expand=True) qui
-        # absorbe la difference en se redimensionnant.
-        self.polar_title_lbl = tk.Label(parent, text="", bg=BG_APP, fg=FG_LABEL,
-                                         font=FONT_LABEL_BOLD)
-        self.polar_title_lbl.pack(anchor="w", padx=10, pady=(0, 0))
-        self.polar_hint_lbl = tk.Label(parent, text="", bg=BG_APP, fg=FG_LABEL_DIM,
-                                        font=("Segoe UI", 8))
-        self.polar_hint_lbl.pack(anchor="w", padx=10, pady=(0, 2))
-
-        # Figure/axes crees UNE SEULE FOIS (reutilises a chaque _draw_polar via
-        # .clear()) -- plus de titre matplotlib (voir plus haut) : la marge du
-        # haut peut donc etre quasiment entierement rendue au cercle. Marge
-        # en bas conservee pour la legende horizontale sous le cercle plutot
-        # que sur le cote (voir _draw_polar) : contrairement a une legende
-        # posee a droite (bbox_to_anchor hors-figure), une legende horizontale
-        # ne rogne jamais la largeur du cercle.
-        self.polar_fig = Figure(figsize=(7, 6), dpi=100, facecolor=BG_APP)
-        self.polar_fig.subplots_adjust(top=0.98, bottom=0.14)
-        self.polar_ax = self.polar_fig.add_subplot(111, projection="polar", facecolor=BG_PANEL)
-        self.polar_ax.set_theta_zero_location("N")
-        self.polar_ax.set_theta_direction(-1)
-        self.polar_ax.tick_params(colors=FG_LABEL, labelsize=8)
-        self.polar_ax.grid(True, color=COLOR_TICK, linestyle="--", linewidth=0.5, alpha=0.6)
-        self.polar_canvas = FigureCanvasTkAgg(self.polar_fig, master=parent)
-        self.polar_canvas.get_tk_widget().configure(bg=BG_APP, highlightthickness=0)
-        self.polar_canvas.get_tk_widget().pack(fill="both", expand=True, padx=10, pady=(0, 6))
-
-        self._last_table = None  # (sails, engines, twa_values, tws_values, grid, counts)
-        self._refresh_config_choices()
-
-    # Bornes de la largeur du menu de configuration, en caracteres : assez
-    # large pour ne pas couper une configuration ordinaire, pas au point de
-    # chasser tout le reste de la ligne hors de l'ecran.
-    POLAR_MENU_MIN_CHARS = 32
-    POLAR_MENU_MAX_CHARS = 64
-
-    def _refresh_polar_menu_width(self, labels):
-        """Ajuste la largeur du menu deroulant au plus long libelle."""
-        if not hasattr(self, "allure_config_menu"):
-            return
-        longest = max((len(l) for l in labels), default=0)
-        self.allure_config_menu.configure(
-            width=max(self.POLAR_MENU_MIN_CHARS,
-                      min(longest + 2, self.POLAR_MENU_MAX_CHARS)))
-
-    def _refresh_config_choices(self):
-        configs = self.persistent_store.configs(session_ids=self._included_session_ids())
-        labels = []
-        self._config_by_label = {}
-        for (sails, engines, derive), count in configs:
-            label = (f"{'+'.join(sails) or '-'} / {'+'.join(engines) or '-'} / "
-                     f"{pe.DERIVE_LABELS.get(derive, '-')}  (n={count})")
-            labels.append(label)
-            self._config_by_label[label] = (sails, engines, derive)
-        self._refresh_polar_menu_width(labels)
-        menu = self.allure_config_menu["menu"]
-        menu.delete(0, "end")
-        for label in labels:
-            # Choisir une configuration retrace immediatement : c'est ce
-            # que le clic veut dire, plus besoin d'un bouton a part.
-            menu.add_command(label=label, command=lambda v=label: self._on_allure_config_selected(v))
-        if labels:
-            if self.allure_config_var.get() not in labels:
-                self.allure_config_var.set(labels[0])
-        else:
-            self.allure_config_var.set("")
-        if hasattr(self, "store_size_lbl"):
-            self._refresh_store_size_label()
-
-    def _on_allure_config_selected(self, label):
-        self.allure_config_var.set(label)
-        self._draw_polar(auto=True)
-
-    def _draw_polar(self, auto=False):
-        """Trace la polaire de la configuration selectionnee. auto=True =
-        appel declenche par la navigation ou un changement de selection :
-        dans ce cas un entrepot vide s'affiche comme un message d'accueil
-        dans la zone de titre, JAMAIS comme une boite de dialogue -- une
-        popup a chaque passage sur l'etape serait insupportable."""
-        label = self.allure_config_var.get()
-        if not label or label not in self._config_by_label:
-            if auto:
-                self.polar_ax.clear()
-                self.polar_canvas.draw_idle()
-                self.polar_title_lbl.configure(
-                    text="Entrepot vide : traitez d'abord une session (etape 1) -- "
-                         "la polaire se tracera ici automatiquement.")
-                self.polar_hint_lbl.configure(text="")
-                self._last_table = None
-            else:
-                messagebox.showinfo("Polaires", "Aucune configuration disponible dans l'entrepot "
-                                                 "cumulatif (traitez d'abord au moins une session).")
-            return
-        sails, engines, derive = self._config_by_label[label]
-        twa_bin = float(self.twa_bin_var.get()) if hasattr(self, "twa_bin_var") else self.config_data["twa_bin_deg"]
-        tws_bin = float(self.tws_bin_var.get()) if hasattr(self, "tws_bin_var") else self.config_data["tws_bin_kn"]
-        symmetric = bool(self.symmetric_var.get()) if hasattr(self, "symmetric_var") \
-            else self.config_data["symmetric_port_starboard"]
-        stat = self.stat_var.get() if hasattr(self, "stat_var") else self.config_data["aggregation_stat"]
-
-        twa_values, tws_values, grid, counts = self.persistent_store.table(
-            sails, engines, derive=derive, twa_bin_deg=twa_bin, tws_bin_kn=tws_bin, symmetric=symmetric, stat=stat,
-            session_ids=self._included_session_ids())
-        # Indice de confiance, calcule sur EXACTEMENT le meme decoupage
-        # (voir PolarSampleStore._cells). Purement informatif : il ne
-        # retranche ni ne modifie une seule vitesse.
-        _t2, _w2, conf = self.persistent_store.confidence_table(
-            sails, engines, derive=derive, twa_bin_deg=twa_bin, tws_bin_kn=tws_bin,
-            symmetric=symmetric, session_ids=self._included_session_ids())
-        self._last_conf = conf
-        self._last_table = (sails, engines, derive, twa_values, tws_values, grid, counts)
-
-        if hasattr(self, "polar_title_lbl"):
-            self.polar_title_lbl.configure(
-                text=f"Voiles: {'+'.join(sails) or '-'}   Moteurs: {'+'.join(engines) or '-'}   "
-                     f"Derive: {pe.DERIVE_LABELS.get(derive, '-')}")
-
-        self.polar_ax.clear()
-        self.polar_ax.set_theta_zero_location("N")
-        self.polar_ax.set_theta_direction(-1)
-        self.polar_ax.tick_params(colors=FG_LABEL, labelsize=8)
-        self.polar_ax.grid(True, color=COLOR_TICK, linestyle="--", linewidth=0.5, alpha=0.6)
-        self.polar_ax.set_facecolor(BG_PANEL)
-
-        if not tws_values:
-            if hasattr(self, "polar_hint_lbl"):
-                self.polar_hint_lbl.configure(text="")
-            self.polar_canvas.draw_idle()
-            return
-
-        # Prepasse : rassemble tous les points (avec leur nombre d'echantillons)
-        # pour pouvoir mettre a l'echelle la taille des marqueurs de facon
-        # coherente sur tout le graphique -- une case batie sur 2 echantillons
-        # ne doit pas avoir l'air aussi fiable qu'une case qui en a 200.
-        # La taille des marqueurs suit desormais l'INDICE DE CONFIANCE et
-        # non le simple nombre d'echantillons : 200 mesures prises dans un
-        # seul bord de dix minutes ne valent pas 20 mesures reparties sur
-        # huit sorties, et le trace doit le montrer plutot que le masquer.
-        series = []
-        max_count = 1
-        max_radius = 0.0
-        for j, tws in enumerate(tws_values):
-            pts = []
-            for i, (twa, row) in enumerate(zip(twa_values, grid)):
-                if row[j] is None:
-                    continue
-                c = (conf[i][j] if conf and i < len(conf) and j < len(conf[i]) else None)
-                pts.append((twa, row[j], (c or {}).get("score", 0)))
-            if not pts:
-                continue
-            pts.sort(key=lambda p: p[0])
-            series.append((tws, pts))
-            max_count = 100
-            max_radius = max(max_radius, max(stw for _, stw, _ in pts))
-
-        for j, (tws, pts) in enumerate(series):
-            thetas = [math.radians(twa) for twa, _, _ in pts]
-            radii = [stw for _, stw, _ in pts]
-            csamples = [c for _, _, c in pts]
-            color = TWS_COLORS[j % len(TWS_COLORS)]
-            if symmetric:
-                # Deux DEMI-COURBES tracees separement (et non une seule
-                # polyligne allant de -170 a +170 en passant par le milieu) :
-                # une polyligne unique refermait les deux bords l'un sur
-                # l'autre par une corde au ras de l'etrave -- disgracieux, et
-                # surtout faux (elle pretendait une vitesse au vent debout, ou
-                # aucune mesure n'existe). Une seule des deux moities porte
-                # l'etiquette de legende, sinon chaque TWS y figurerait deux
-                # fois.
-                halves = [([-t for t in reversed(thetas)], list(reversed(radii))),
-                          (thetas, radii)]
-                counts_full = list(reversed(csamples)) + csamples
-                thetas_full = halves[0][0] + halves[1][0]
-                radii_full = halves[0][1] + halves[1][1]
-                for k, (th, ra) in enumerate(halves):
-                    self.polar_ax.plot(th, ra, linewidth=1.2, color=color,
-                                        label=(f"TWS {tws:g} nds" if k == 0 else None))
-            else:
-                thetas_full, radii_full, counts_full = thetas, radii, csamples
-                # Ligne fine (forme generale, toujours lisible) ; les
-                # marqueurs, dont la taille reflete le nombre d'echantillons
-                # de chaque case, sont poses ensuite pour les deux cas.
-                self.polar_ax.plot(thetas_full, radii_full, linewidth=1.2, color=color,
-                                    label=f"TWS {tws:g} nds")
-            # Marqueurs (6pt min pour rester visibles, 42pt max pour une case
-            # tres fournie) -- poses en UN seul appel, symetrie ou non.
-            sizes = [6.0 + 36.0 * (c / max_count) for c in counts_full]
-            self.polar_ax.scatter(thetas_full, radii_full, s=sizes, color=color,
-                                   edgecolors="none", zorder=3)
-
-        # Graduations angulaires en ANGLE DE VENT (0-180 de chaque bord) et
-        # non en 0-360 : le demi-cercle babord porte des angles negatifs
-        # (-90 = travers babord), que matplotlib etiquetterait "270 deg" --
-        # un cap, alors qu'une polaire ne parle jamais que d'angles au vent.
-        # Les deux bords se lisent donc desormais pareil, 0 a l'etrave, 180
-        # a l'arriere.
-        ticks = [i * math.pi / 4.0 for i in range(8)]
-        self.polar_ax.set_xticks(ticks)
-        self.polar_ax.set_xticklabels(
-            [f"{abs(int(round(math.degrees(((t + math.pi) % (2 * math.pi)) - math.pi))))}°"
-             for t in ticks])
-
-        # Marge d'un demi-noeud au-dela du point le plus rapide : sans ca,
-        # matplotlib cale automatiquement le bord exterieur du cercle
-        # pile sur la valeur max, et un point qui tombe dessus se retrouve
-        # colle/coupe par le trait de bordure -- difficile a lire quand la
-        # vitesse est justement a la limite. La marge laisse de l'air autour
-        # de tous les points, y compris les plus rapides.
-        self.polar_ax.set_rmax(max_radius + 0.5)
-
-        # Legende HORIZONTALE sous le cercle plutot qu'a droite (l'ancien
-        # bbox_to_anchor=(1.35, 1.1) reservait une grande marge laterale hors
-        # de la figure, ce qui laissait moins de place au cercle lui-meme et
-        # se lisait mal en petite fenetre) -- ncol s'adapte au nombre de
-        # series TWS pour rester sur 1-2 lignes maximum.
-        ncol = max(1, min(len(series), 6))
-        legend = self.polar_ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.06), ncol=ncol,
-                                       facecolor=BG_PANEL, edgecolor=COLOR_TICK, fontsize=8)
-        for text in legend.get_texts():
-            text.set_color(FG_LABEL)
-        # Pas de ax.set_title() ici : le titre vit desormais dans
-        # polar_title_lbl (Label Tk, deja mis a jour plus haut), toujours
-        # visible quelle que soit la taille de la fenetre -- voir la note
-        # dans _build_step_polaires.
-        if hasattr(self, "polar_hint_lbl"):
-            # Bilan de confiance : combien de cases meritent qu'on s'y fie,
-            # et ce qui manque encore a cette configuration pour etre mure.
-            mat = self.persistent_store.config_confidence(
-                sails, engines, derive=derive, twa_bin_deg=twa_bin, tws_bin_kn=tws_bin,
-                symmetric=symmetric, session_ids=self._included_session_ids())
-            txt = ("La taille des points reflete l'INDICE DE CONFIANCE de chaque case "
-                   "(nombre de mesures, repartition dans le temps, dispersion) -- "
-                   "un gros point est une case sur laquelle on peut compter.\n"
-                   f"Maturite de cette polaire : {mat['score']}/100 ({mat['word']}) -- "
-                   f"{mat['solid']} case(s) solide(s), {mat['usable']} bonne(s), "
-                   f"{mat['weak']} fragile(s), sur {mat['sessions']} sortie(s).")
-            if mat["missing"]:
-                txt += "  Jamais mesure : " + ", ".join(mat["missing"]) + "."
-            self.polar_hint_lbl.configure(text=txt)
-        self.polar_canvas.draw_idle()
-
-    def _export_pol(self):
-        if not self._last_table:
-            messagebox.showinfo("Export", "Tracez d'abord une polaire.")
-            return
-        sails, engines, derive, twa_values, tws_values, grid, _counts = self._last_table
-        if not twa_values:
-            messagebox.showinfo("Export", "Aucune donnee a exporter pour cette configuration.")
-            return
-        path = filedialog.asksaveasfilename(
-            defaultextension=".pol", filetypes=[("Fichier polaire", "*.pol")],
-            initialfile=f"polaire_{'-'.join(sails) or 'nu'}_{'-'.join(engines) or 'nu'}_{derive or 'nu'}.pol")
-        if not path:
-            return
-        with open(path, "w", encoding="utf-8") as fh:
-            fh.write(pe.format_pol_table(twa_values, tws_values, grid))
-        messagebox.showinfo("Export", f"Fichier exporte :\n{path}")
-
-    def _export_csv_one(self):
-        if not self._last_table:
-            messagebox.showinfo("Export", "Tracez d'abord une polaire.")
-            return
-        sails, engines, derive, twa_values, tws_values, grid, counts = self._last_table
-        path = filedialog.asksaveasfilename(
-            defaultextension=".csv", filetypes=[("CSV", "*.csv")],
-            initialfile=f"polaire_{'-'.join(sails) or 'nu'}_{'-'.join(engines) or 'nu'}_{derive or 'nu'}.csv")
-        if not path:
-            return
-        content = pe.format_csv_table(
-            [(sails, engines, derive, twa_values, tws_values, grid, counts)],
-            confidences=[getattr(self, "_last_conf", None)])
-        with open(path, "w", encoding="utf-8", newline="") as fh:
-            fh.write(content)
-        messagebox.showinfo("Export", f"Fichier exporte :\n{path}")
-
-    def _export_csv_all(self):
-        session_ids = self._included_session_ids()
-        configs = self.persistent_store.configs(session_ids=session_ids)
-        if not configs:
-            messagebox.showinfo("Export", "L'entrepot cumulatif est vide (ou aucune passe incluse).")
-            return
-        twa_bin = float(self.twa_bin_var.get()) if hasattr(self, "twa_bin_var") else self.config_data["twa_bin_deg"]
-        tws_bin = float(self.tws_bin_var.get()) if hasattr(self, "tws_bin_var") else self.config_data["tws_bin_kn"]
-        symmetric = bool(self.symmetric_var.get()) if hasattr(self, "symmetric_var") \
-            else self.config_data["symmetric_port_starboard"]
-        stat = self.stat_var.get() if hasattr(self, "stat_var") else self.config_data["aggregation_stat"]
-        configs_tables, confidences = [], []
-        for (sails, engines, derive), _count in configs:
-            twa_values, tws_values, grid, counts = self.persistent_store.table(
-                sails, engines, derive=derive, twa_bin_deg=twa_bin, tws_bin_kn=tws_bin, symmetric=symmetric,
-                stat=stat, session_ids=session_ids)
-            if twa_values:
-                configs_tables.append((sails, engines, derive, twa_values, tws_values, grid, counts))
-                confidences.append(self.persistent_store.confidence_table(
-                    sails, engines, derive=derive, twa_bin_deg=twa_bin, tws_bin_kn=tws_bin,
-                    symmetric=symmetric, session_ids=session_ids)[2])
-        path = filedialog.asksaveasfilename(
-            defaultextension=".csv", filetypes=[("CSV", "*.csv")], initialfile="polaires_toutes_configs.csv")
-        if not path:
-            return
-        content = pe.format_csv_table(configs_tables, confidences=confidences)
-        with open(path, "w", encoding="utf-8", newline="") as fh:
-            fh.write(content)
-        messagebox.showinfo("Export", f"Fichier exporte :\n{path}")
-
-    # ---------------------------------------------------------------
-    # Polaire MAX exploitable (routage) -- page qui s'ouvre PAR-DESSUS
-    # l'etape Polaires. Les polaires par configuration repondent a "que
-    # vaut le bateau sous cette voilure ?" ; un logiciel de routage, lui,
-    # veut UNE seule table pleine : "que vaut le bateau, point". Cette
-    # page la construit : pour chaque case cap/vent, la meilleure vitesse
-    # parmi les configurations retenues -- et LAQUELLE l'a obtenue, ce qui
+    # Etape 3 : Polaires -- la polaire MAX exploitable, directement.
+    # Pour chaque case cap/vent, la meilleure vitesse parmi les
+    # configurations cochees l'emporte -- et l'on retient LAQUELLE, ce qui
     # donne en prime le guide de voilure ("pour ce cap et ce vent, portez
-    # ca"). Les trous interieurs sont bouches par interpolation le long du
-    # TWA (jamais d'extrapolation au-dela des mesures).
+    # ca"). Une seule configuration cochee, et c'est SA polaire : la vue par
+    # configuration n'est qu'un cas particulier de la polaire max, elle n'a
+    # plus d'ecran a part. Les trous interieurs sont bouches par
+    # interpolation le long du TWA (jamais d'extrapolation au-dela des
+    # mesures).
+    #
+    # Le trace est AUTOMATIQUE : arriver sur l'etape, cocher une
+    # configuration ou enregistrer de nouveaux parametres retrace aussitot.
+    # Les reglages de la table (case, symetrie, statistique) vivent dans les
+    # Parametres, categorie "Lissage & table" : on les fixe une fois, ce ne
+    # sont pas des commandes de trace.
+    #
+    # LISIBILITE D'ABORD : le trace dispose de toute la hauteur de la page.
+    # Rien dont la taille depend du nombre de configurations (leur liste,
+    # leurs codes) ou du nombre de vents (la legende) ne s'empile au-dessus
+    # ou au-dessous de lui : la liste vit dans la colonne de gauche avec sa
+    # propre barre de defilement, la legende des vents a droite du cercle,
+    # le guide de voilure dans une vue voisine, A LA PLACE du trace. Un
+    # bateau a vingt configurations a donc la meme polaire, a la meme
+    # taille, qu'un bateau a deux.
     # ---------------------------------------------------------------
-    def _open_max_polar_window(self):
-        session_ids = self._included_session_ids()
-        configs = self.persistent_store.configs(session_ids=session_ids)
-        if not configs:
-            messagebox.showinfo("Polaire max", "L'entrepot cumulatif est vide (ou aucune "
-                                               "passe incluse) : rien a combiner.")
-            return
-        if getattr(self, "_max_polar_win", None) is not None:
-            try:
-                self._max_polar_win.lift()
-                return
-            except tk.TclError:
-                self._max_polar_win = None
 
-        win = tk.Toplevel(self)
-        self._max_polar_win = win
-        win.title("Polaire max exploitable (routage)")
-        win.configure(bg=BG_APP)
-        win.transient(self)
-        # Taille bornee par l'ECRAN : sur un portable 1366x768, une fenetre
-        # de 1080x760 demandee telle quelle depasse la zone utile, et le bas
-        # -- ou vivent justement les boutons d'export -- se retrouve sous la
-        # barre des taches. On prend donc le plus petit des deux.
-        try:
-            scr_w, scr_h = win.winfo_screenwidth(), win.winfo_screenheight()
-        except tk.TclError:
-            scr_w, scr_h = 1280, 800
-        win_w, win_h = min(1080, max(720, scr_w - 80)), min(760, max(520, scr_h - 120))
-        win.geometry(f"{win_w}x{win_h}")
-        win.minsize(720, 520)
-        # Geometrie APPLIQUEE avant de construire le contenu : sans cela, la
-        # colonne de gauche (hauteur imposee, pack_propagate coupe) se met en
-        # page contre une fenetre encore haute d'un pixel, et son bas --
-        # les exports -- n'apparait qu'au premier redimensionnement. C'etait
-        # exactement le symptome : "obligé de resize pour récupérer le csv".
-        win.update_idletasks()
-        win.protocol("WM_DELETE_WINDOW", self._close_max_polar_window)
-        win.bind("<Escape>", lambda _e: self._close_max_polar_window())
+    # Largeur de la colonne de gauche, en pixels : assez pour lire une
+    # configuration sur une ou deux lignes, pas au point de manger le trace.
+    MAX_LEFT_WIDTH = 300
 
-        # Rien ne defile ici : la page est batie pour TENIR dans la fenetre.
-        # Les commandes (exports, recherche de voilure, options) sont ancrees
-        # aux bords, ou Tk les sert en premier ; seule la liste des
-        # configurations, dont la hauteur depend du bateau, absorbe le reste.
-        # Une commande qu'il faut decouvrir en secouant la fenetre n'existe
-        # pas pour celui qui la cherche.
+    def _build_step_polaires(self, parent):
+        self._max_cfg_vars = []       # [(BooleanVar, (voiles, moteurs, derive), libelle)]
+        self._max_cfg_code = {}       # (voiles, moteurs, derive) -> "C1", "C2"...
+        self._max_checked = {}        # coches memorisees d'une reconstruction a l'autre
+        self._max_engine_rule = None  # regle "moteur dans la voilure" des coches par defaut
+        self._max_codes = []          # codes des configurations de la table courante
+        self._max_result = None       # (twa, tws, grid, counts, winners, mask, labels, clipped)
+        self._max_hidden_tws = set()  # vents masques d'un clic dans la legende
+        self._max_legend = None
+        self._max_legend_map = {}     # artiste de la legende -> vent qu'il designe
+        self._max_legend_px = 0       # largeur reservee a droite pour la legende
+        self._max_legend_click = False
+        self._max_pick_mouse = None
+        self._max_view = None         # None = ajuste a la page
+        self._max_drag = None
+        self._max_press_xy = None
+        self._max_detail_win = None
+        self._max_detail_cell = None
+        self._max_conf = []           # confiance de chaque case (gagnante), ou None
+
         # --- Pied de page : les EXPORTS, sur toute la largeur ---
         # Pose EN PREMIER et en side="bottom" : Tk sert les bords avant le
-        # centre, ces boutons ne peuvent donc plus etre repousses hors de la
-        # fenetre par quoi que ce soit au-dessus. C'est aussi leur vraie
-        # place -- ils concluent la page, ils n'appartiennent pas a la
-        # colonne des reglages.
-        footer = tk.Frame(win, bg=BG_PANEL)
+        # centre, ces boutons ne peuvent donc pas etre repousses hors de la
+        # page par quoi que ce soit au-dessus.
+        footer = tk.Frame(parent, bg=BG_PANEL)
         footer.pack(side="bottom", fill="x")
-        tk.Frame(win, bg=COLOR_BORDER, height=1).pack(side="bottom", fill="x")
+        tk.Frame(parent, bg=COLOR_BORDER, height=1).pack(side="bottom", fill="x")
         foot_in = tk.Frame(footer, bg=BG_PANEL)
         foot_in.pack(fill="x", padx=12, pady=8)
         tk.Button(foot_in, text="Exporter .pol (routage)",
@@ -6560,172 +5795,127 @@ class App(tk.Tk):
         tk.Button(foot_in, text="Exporter TimeZero (2 fichiers .xml)",
                   command=self._max_polar_export_timezero, padx=14, pady=4,
                   cursor="hand2").pack(side="left", padx=(8, 0))
-        tk.Button(foot_in, text="Fermer", command=self._close_max_polar_window,
-                  padx=14, pady=4, cursor="hand2").pack(side="right")
-        # Aucune explication en pied de page : un texte long coince entre des
-        # boutons se replie mal au redimensionnement et pousse le reste. Ce
-        # qu'il faut savoir sur chaque format est dit la ou on le decide --
-        # dans la section "Trous de la grille" pour le remplissage, et dans
-        # le compte rendu qui suit chaque export.
+        # A part, a droite : un export pour le tableur, une polaire par
+        # configuration avec son indice de confiance -- pas une table de
+        # routage.
+        tk.Button(foot_in, text="Exporter .csv (une polaire par configuration)",
+                  command=self._export_csv_all, padx=14, pady=4,
+                  cursor="hand2").pack(side="right")
 
-        left = tk.Frame(win, bg=BG_APP, width=346)
-        left.pack(side="left", fill="y", padx=(10, 4), pady=10)
+        left = tk.Frame(parent, bg=BG_APP, width=self.MAX_LEFT_WIDTH)
+        left.pack(side="left", fill="y", padx=(10, 0), pady=(0, 6))
         left.pack_propagate(False)
-        right = tk.Frame(win, bg=BG_APP)
-        right.pack(side="left", fill="both", expand=True, padx=(4, 10), pady=10)
+        right = tk.Frame(parent, bg=BG_APP)
+        right.pack(side="left", fill="both", expand=True, padx=(6, 10), pady=(10, 6))
 
-        # Dans la colonne de gauche, les deux blocs du BAS sont poses en
-        # premier, en side="bottom" : ils gardent leur place quoi qu'il
-        # arrive, et c'est la liste des configurations -- seule partie dont
-        # la hauteur depend des donnees -- qui absorbe ce qui reste. Rien ne
-        # defile : tout tient dans la fenetre, par construction.
+        # Colonne de gauche : les deux blocs du BAS sont poses en premier, en
+        # side="bottom" -- ils gardent leur place quoi qu'il arrive, et c'est
+        # la liste des configurations, seule partie dont la hauteur depend
+        # des donnees, qui prend le reste et defile au besoin. Pas de notes
+        # explicatives ici (le README les porte, et la fiche d'un point dit
+        # ce qu'interpolation et ecretage ont fait de sa case) : chaque ligne
+        # prise a ces blocs l'est a la liste, et sur un portable elle n'avait
+        # plus la place d'afficher une seule configuration.
+        wrap = self.MAX_LEFT_WIDTH - 50
         f_ask = section(left, "Quelle voilure pour ce cap / ce vent ?", side="bottom")
-        f_opt = section(left, "Trous de la grille", side="bottom")
+        f_opt = section(left, "Trous et pointes", side="bottom")
+        f_cfg = section(left, "Configurations en concurrence", expand=True)
 
-        # La liste des configurations est le SEUL bloc dont la hauteur depend
-        # des donnees : elle prend donc tout ce qui reste. Au-dela d'une
-        # dizaine de configurations elle se donne sa propre barre de
-        # defilement -- mais elle seule, et seulement dans ce cas : sur un
-        # bateau ordinaire, rien ne defile nulle part.
-        f_cfg = section(left, "Configurations mises en concurrence", expand=True)
-        note(f_cfg, "La meilleure vitesse parmi les configurations cochees l'emporte, "
-                    "case par case. Le moteur fait partie de la voilure (defaut "
-                    "modifiable : roue dentee > Lissage & table).",
-             wraplength=300)
-        if len(configs) > 10:
-            cfg_outer, cfg_box = make_scrollable(f_cfg, height=1)
-            cfg_outer.pack(fill="both", expand=True)
-        else:
-            cfg_box = tk.Frame(f_cfg, bg=BG_APP)
-            cfg_box.pack(fill="both", expand=True)
-        self._max_cfg_vars = []
-        # Le moteur fait-il partie de la voilure ? Sur ce bateau (cargo a
-        # voile et moteur), OUI par defaut : tout concourt. En mode
-        # "voilier pur" (reglage decoche), les configurations moteur
-        # restent proposees mais decochees -- sauf si le bateau n'a QUE des
-        # configurations moteur, auquel cas tout est coche plutot que
-        # d'ouvrir sur une page vide.
-        engine_in = bool(self.config_data.get("max_polar_include_engine", True))
-        any_pure_sail = any(not engines for (_s, engines, _d), _c in configs)
-        for (sails, engines, derive), count in configs:
-            var = tk.BooleanVar(value=engine_in or (not engines) or not any_pure_sail)
-            label = (f"{'+'.join(sails) or '-'} / {'+'.join(engines) or '-'} / "
-                     f"{pe.DERIVE_LABELS.get(derive, '-')}  (n={count})")
-            # wraplength : une configuration complete (voiles + moteurs +
-            # derive + effectif) depasse largement la largeur de la colonne,
-            # et une etiquette tronquee ne permet plus de savoir CE QU'ON
-            # COCHE -- elle passe donc a la ligne au lieu d'etre coupee.
-            tk.Checkbutton(cfg_box, text=label, variable=var, bg=BG_APP, fg=FG_LABEL,
-                           selectcolor=BG_PANEL, activebackground=BG_APP,
-                           font=FONT_LABEL, anchor="w", justify="left",
-                           wraplength=290,
-                           command=self._max_polar_recompute).pack(fill="x", padx=6)
-            self._max_cfg_vars.append((var, (sails, engines, derive), label))
+        btn_row = tk.Frame(f_cfg, bg=BG_APP)
+        btn_row.pack(fill="x", padx=6, pady=(2, 0))
+        tk.Button(btn_row, text="Tout cocher", command=lambda: self._max_check_all(True),
+                  padx=6, cursor="hand2").pack(side="left")
+        tk.Button(btn_row, text="Tout decocher", command=lambda: self._max_check_all(False),
+                  padx=6, cursor="hand2").pack(side="left", padx=(6, 0))
+        note(f_cfg, "Double-clic sur une configuration : elle seule.", pady=(2, 2),
+             wraplength=wrap)
+        cfg_outer, self._max_cfg_box = make_scrollable(f_cfg, height=1)
+        cfg_outer.pack(fill="both", expand=True, padx=(4, 2), pady=(0, 4))
 
         self._max_fill_var = tk.BooleanVar(value=True)
-        tk.Checkbutton(f_opt, text="Boucher par interpolation (le long du TWA)",
+        tk.Checkbutton(f_opt, text="Boucher les trous (interpolation)",
                        variable=self._max_fill_var, bg=BG_APP, fg=FG_LABEL,
                        selectcolor=BG_PANEL, activebackground=BG_APP, font=FONT_LABEL,
+                       anchor="w", justify="left", wraplength=wrap,
                        command=self._max_polar_recompute).pack(fill="x", padx=6)
-        note(f_opt, "Uniquement ENTRE deux cases mesurees d'une meme colonne de vent, "
-                    "jamais au-dela. Les cases interpolees sont marquees dans le .csv. "
-                    "A l'export .pol, les cases restees sans mesure ni interpolation "
-                    "valent 0 : un routeur y lit 'le bateau ne marche pas la'.",
-             wraplength=300)
 
         clip_row = tk.Frame(f_opt, bg=BG_APP)
-        clip_row.pack(fill="x", padx=6, pady=(4, 0))
+        clip_row.pack(fill="x", padx=6, pady=(0, 4))
         self._max_clip_var = tk.BooleanVar(
             value=bool(self.config_data.get("max_polar_clip_enabled", False)))
-        tk.Checkbutton(clip_row, text="Ecreter les pointes au-dela de",
+        tk.Checkbutton(clip_row, text="Ecreter au-dela de",
                        variable=self._max_clip_var, bg=BG_APP, fg=FG_LABEL,
                        selectcolor=BG_PANEL, activebackground=BG_APP, font=FONT_LABEL,
                        command=self._max_polar_recompute).pack(side="left")
         self._max_clip_slope_var = tk.DoubleVar(
             value=float(self.config_data.get("max_polar_clip_slope", 1.5)))
-        sp = tk.Spinbox(clip_row, from_=0.1, to=10.0, increment=0.1, width=5,
+        sp = tk.Spinbox(clip_row, from_=0.1, to=10.0, increment=0.1, width=4,
                         textvariable=self._max_clip_slope_var,
                         command=self._max_polar_recompute)
         sp.pack(side="left", padx=(4, 4))
         sp.bind("<Return>", lambda _e: self._max_polar_recompute())
         sp.bind("<FocusOut>", lambda _e: self._max_polar_recompute())
-        tk.Label(clip_row, text="kn / 10 deg", bg=BG_APP, fg=FG_LABEL).pack(side="left")
-        note(f_opt, "Une polaire est une courbe PHYSIQUEMENT LISSE : la vitesse d'un "
-                    "bateau ne peut pas grimper de trois noeuds entre 60 et 65 degres. "
-                    "Une case qui le pretend ne decrit pas le bateau -- elle decrit un "
-                    "surf sur une vague, une risee ou une poussee de courant, un instant "
-                    "que le routage prendrait pour un acquis. L'ecretage borne la PENTE "
-                    "de la courbe et rabaisse ces pointes. Uniquement vers le BAS (un "
-                    "creux n'est pas suspect, le remonter serait inventer une "
-                    "performance) et jamais aux extremites, qui n'ont qu'un voisin. "
-                    "Conseille : 1,5 kn / 10 deg.", wraplength=300)
+        tk.Label(clip_row, text="nd / 10°", bg=BG_APP, fg=FG_LABEL).pack(side="left")
+        # Compte rendu de l'ecretage : affiche seulement quand il a quelque
+        # chose a dire (voir _max_polar_recompute) -- vide, il prendrait une
+        # ligne a la liste pour rien.
         self._max_clip_lbl = tk.Label(f_opt, text="", bg=BG_APP, fg=COLOR_ACCENT,
-                                       font=("Segoe UI", 8), anchor="w", wraplength=300,
+                                       font=("Segoe UI", 8), anchor="w", wraplength=wrap,
                                        justify="left")
-        self._max_clip_lbl.pack(fill="x", padx=6, pady=(0, 6))
 
         ask_row = tk.Frame(f_ask, bg=BG_APP)
         ask_row.pack(fill="x", padx=6, pady=(0, 4))
-        tk.Label(ask_row, text="TWA (deg) :", bg=BG_APP, fg=FG_LABEL).pack(side="left")
+        tk.Label(ask_row, text="TWA :", bg=BG_APP, fg=FG_LABEL).pack(side="left")
         self._max_ask_twa = tk.Entry(ask_row, width=5)
-        self._max_ask_twa.pack(side="left", padx=(4, 10))
-        tk.Label(ask_row, text="TWS (nds) :", bg=BG_APP, fg=FG_LABEL).pack(side="left")
+        self._max_ask_twa.pack(side="left", padx=(4, 8))
+        tk.Label(ask_row, text="TWS :", bg=BG_APP, fg=FG_LABEL).pack(side="left")
         self._max_ask_tws = tk.Entry(ask_row, width=5)
-        self._max_ask_tws.pack(side="left", padx=(4, 10))
+        self._max_ask_tws.pack(side="left", padx=(4, 8))
         tk.Button(ask_row, text="Chercher", command=self._max_polar_lookup,
                   padx=8).pack(side="left")
         for w in (self._max_ask_twa, self._max_ask_tws):
             w.bind("<Return>", lambda _e: self._max_polar_lookup())
         self._max_ask_result = tk.Label(f_ask, text="", bg=BG_APP, fg=FG_LABEL,
-                                         font=FONT_LABEL_BOLD, wraplength=300,
+                                         font=FONT_LABEL_BOLD, wraplength=wrap,
                                          justify="left", anchor="w")
         self._max_ask_result.pack(fill="x", padx=6, pady=(0, 6))
 
-        # --- Colonne de droite : trace + guide de voilure ---
-        self._max_title_lbl = tk.Label(right, text="", bg=BG_APP, fg=FG_LABEL,
-                                        font=FONT_LABEL_BOLD, anchor="w")
-        self._max_title_lbl.pack(side="top", fill="x")
+        # --- Colonne de droite : un en-tete court, puis la vue ---
+        head = tk.Frame(right, bg=BG_APP)
+        head.pack(side="top", fill="x")
+        # Trace et guide de voilure : deux vues A LA MEME PLACE plutot
+        # qu'empilees -- pose sous le trace, le guide lui volait sa hauteur.
+        self._max_view_btns = {}
+        for key, text in (("guide", "Guide de voilure"), ("polaire", "Polaire")):
+            b = tk.Button(head, text=text, relief="flat", bd=0, padx=12, pady=3,
+                          cursor="hand2", command=lambda k=key: self._max_show_view(k))
+            b.pack(side="right", padx=(4, 0))
+            self._max_view_btns[key] = b
+        self._max_title_lbl = tk.Label(head, text="", bg=BG_APP, fg=FG_LABEL,
+                                        font=FONT_LABEL_BOLD, anchor="w", justify="left")
+        self._max_title_lbl.pack(side="left", fill="x", expand=True)
+        head.bind("<Configure>", lambda e: self._max_title_lbl.configure(
+            wraplength=max(200, e.width - 250)))
         self._max_zoom_lbl = tk.Label(right, text="", bg=BG_APP, fg=FG_LABEL_DIM,
-                                       font=("Segoe UI", 8), anchor="w")
-        self._max_zoom_lbl.pack(side="top", fill="x")
+                                       font=("Segoe UI", 8), anchor="w", justify="left")
+        self._max_zoom_lbl.pack(side="top", fill="x", pady=(2, 4))
+        right.bind("<Configure>", lambda e: self._max_zoom_lbl.configure(
+            wraplength=max(200, e.width - 12)))
+        views = tk.Frame(right, bg=BG_APP)
+        views.pack(side="top", fill="both", expand=True)
 
-        # ORDRE DE POSE : la legende et le guide EN PREMIER, ancres en bas.
-        # Tk sert les bords avant le centre ; le graphique, lui, prend ce
-        # qui reste. Poses apres lui, ils se faisaient ecraser par son
-        # expand=True et la legende devenait illisible -- on lisait "C3"
-        # dans le guide sans pouvoir savoir de quelle voilure il s'agit.
-        # La legende dit a quoi correspondent les codes C1, C2... : une
-        # ligne par configuration, et un retour a la ligne qui suit la
-        # largeur reelle de la colonne.
-        self._max_legend_lbl = tk.Label(right, text="", bg=BG_APP, fg=FG_LABEL,
-                                         font=FONT_MONO, justify="left", anchor="w")
-        self._max_legend_lbl.pack(side="bottom", fill="x", pady=(4, 0))
-        guide_wrap = tk.Frame(right, bg=BG_APP)
-        guide_wrap.pack(side="bottom", fill="x")
-        self._max_guide = ttk.Treeview(guide_wrap, show="headings", height=7)
-        guide_sb = ttk.Scrollbar(guide_wrap, orient="vertical", command=self._max_guide.yview)
-        self._max_guide.configure(yscrollcommand=guide_sb.set)
-        self._max_guide.pack(side="left", fill="x", expand=True)
-        guide_sb.pack(side="left", fill="y")
-        # CLIC sur une case du guide (ou du trace) : la fiche complete du
-        # point s'ouvre -- voir _open_max_cell_details.
-        self._max_guide.bind("<Button-1>", self._on_max_guide_click)
-        tk.Label(right, text="Guide de voilure (configuration gagnante par case) "
-                             "-- cliquez une case pour la fiche detaillee du point :",
-                 bg=BG_APP, fg=FG_LABEL, font=FONT_LABEL_BOLD, anchor="w").pack(
-            side="bottom", fill="x", pady=(6, 0))
-
-        self._max_fig = Figure(figsize=(6, 4.6), dpi=100, facecolor=BG_APP)
-        self._max_fig.subplots_adjust(top=0.97, bottom=0.13)
+        # Vue 1 : le trace.
+        plot_frame = tk.Frame(views, bg=BG_APP)
+        self._max_fig = Figure(figsize=(7, 5), dpi=100, facecolor=BG_APP)
         self._max_ax = self._max_fig.add_subplot(111, projection="polar", facecolor=BG_PANEL)
-        self._max_canvas = FigureCanvasTkAgg(self._max_fig, master=right)
+        self._max_canvas = FigureCanvasTkAgg(self._max_fig, master=plot_frame)
         self._max_canvas.get_tk_widget().configure(bg=BG_APP, highlightthickness=0)
-        self._max_canvas.get_tk_widget().pack(side="top", fill="both", expand=True)
+        self._max_canvas.get_tk_widget().pack(fill="both", expand=True)
         # Infobulle de SURVOL : une polaire porte des centaines de cases, et
         # aller chercher chacune dans un tableau casse le fil de la lecture.
         # Sous le curseur, la case dit tout ce qu'elle sait d'elle-meme --
         # vitesse, voilure gagnante, origine, confiance.
-        self._max_tip = tk.Label(right, text="", bg=BG_PANEL, fg=FG_LABEL,
+        self._max_tip = tk.Label(plot_frame, text="", bg=BG_PANEL, fg=FG_LABEL,
                                   font=("Segoe UI", 8), justify="left", anchor="w",
                                   relief="solid", borderwidth=1, padx=6, pady=4)
         self._max_canvas.mpl_connect("motion_notify_event", self._on_max_polar_hover)
@@ -6739,33 +5929,160 @@ class App(tk.Tk):
         # justement ce qu'on cherche a lire de plus pres. Ici c'est le CADRE
         # du trace qu'on agrandit dans la figure : tout grossit ensemble, y
         # compris les graduations, et ce qui deborde est simplement rogne.
-        self._max_view = None          # None = ajuste a la fenetre
-        self._max_drag = None
         self._max_canvas.mpl_connect("scroll_event", self._on_max_polar_scroll)
         self._max_canvas.mpl_connect("button_press_event", self._on_max_polar_press)
         self._max_canvas.mpl_connect("button_release_event", self._on_max_polar_release)
+        self._max_canvas.mpl_connect("pick_event", self._on_max_legend_pick)
         self._max_canvas.get_tk_widget().bind(
             "<Double-1>", lambda _e: self._reset_max_polar_zoom())
-        right.bind("<Configure>", lambda e: self._max_legend_lbl.configure(
-            wraplength=max(200, e.width - 12)))
-
-        self._max_result = None   # (twa, tws, grid, counts, winners, mask, labels, clipped)
         # Le cadre carre se deduit des proportions de la FIGURE : redimensionner
         # la fenetre les change, la vue doit donc se reposer.
         self._max_canvas.get_tk_widget().bind(
             "<Configure>", lambda _e: self._apply_max_view(), add="+")
-        self._max_polar_recompute()
-        win.update_idletasks()
-        self._center_on_parent(win)
 
-    def _close_max_polar_window(self):
-        self._close_max_cell_details()
-        if getattr(self, "_max_polar_win", None) is not None:
-            try:
-                self._max_polar_win.destroy()
-            except tk.TclError:
-                pass
-            self._max_polar_win = None
+        # Vue 2 : le guide de voilure.
+        guide_frame = tk.Frame(views, bg=BG_APP)
+        tk.Label(guide_frame, text="Configuration gagnante par case -- les codes C1, C2... "
+                                   "sont ceux de la colonne de gauche ; ~ = case interpolee. "
+                                   "Cliquez une case pour la fiche detaillee du point.",
+                 bg=BG_APP, fg=FG_LABEL_DIM, font=("Segoe UI", 8), anchor="w",
+                 justify="left").pack(side="top", fill="x", pady=(0, 4))
+        gwrap = tk.Frame(guide_frame, bg=BG_APP)
+        gwrap.pack(side="top", fill="both", expand=True)
+        self._max_guide = ttk.Treeview(gwrap, show="headings")
+        guide_sb_y = ttk.Scrollbar(gwrap, orient="vertical", command=self._max_guide.yview)
+        guide_sb_x = ttk.Scrollbar(gwrap, orient="horizontal", command=self._max_guide.xview)
+        self._max_guide.configure(yscrollcommand=guide_sb_y.set,
+                                  xscrollcommand=guide_sb_x.set)
+        guide_sb_y.pack(side="right", fill="y")
+        guide_sb_x.pack(side="bottom", fill="x")
+        self._max_guide.pack(side="left", fill="both", expand=True)
+        # CLIC sur une case du guide (ou du trace) : la fiche complete du
+        # point s'ouvre -- voir _open_max_cell_details.
+        self._max_guide.bind("<Button-1>", self._on_max_guide_click)
+
+        self._max_views = {"polaire": plot_frame, "guide": guide_frame}
+        self._max_show_view("polaire")
+        self._refresh_config_choices()
+
+    def _max_show_view(self, which):
+        """Trace ou guide de voilure, a la meme place : la vue choisie prend
+        toute la hauteur disponible."""
+        for key, frame in self._max_views.items():
+            if key == which:
+                frame.pack(fill="both", expand=True)
+            else:
+                frame.pack_forget()
+        for key, btn in self._max_view_btns.items():
+            on = (key == which)
+            btn.configure(bg=BG_NAV_ACTIVE if on else BG_NAV,
+                          fg=FG_ON_ACCENT if on else FG_LABEL,
+                          activebackground=BG_NAV_ACTIVE if on else BG_NAV,
+                          font=FONT_LABEL_BOLD if on else FONT_LABEL)
+
+    def _refresh_config_choices(self):
+        """Reconstruit la liste des configurations -- l'entrepot ou les passes
+        incluses ont change -- en gardant ce qui etait coche, puis retrace si
+        l'etape est sous les yeux. Sinon le trace attendra qu'on y arrive
+        (voir _show_step) : inutile de calculer une polaire que personne ne
+        regarde."""
+        if hasattr(self, "store_size_lbl"):
+            self._refresh_store_size_label()
+        if not hasattr(self, "_max_cfg_box"):
+            return
+        configs = self.persistent_store.configs(session_ids=self._included_session_ids())
+        for var, cfg, _lbl in self._max_cfg_vars:
+            self._max_checked[cfg] = bool(var.get())
+        # Le moteur fait-il partie de la voilure ? Sur ce bateau (cargo a
+        # voile et moteur), OUI par defaut : tout concourt. En mode "voilier
+        # pur" (reglage decoche), les configurations moteur restent
+        # proposees mais decochees -- sauf si le bateau n'a QUE des
+        # configurations moteur, auquel cas tout est coche plutot que
+        # d'ouvrir sur une page vide. Changer ce reglage reapplique la regle
+        # a toutes les coches.
+        engine_in = bool(self.config_data.get("max_polar_include_engine", True))
+        if engine_in != self._max_engine_rule:
+            self._max_checked.clear()
+            self._max_engine_rule = engine_in
+        any_pure_sail = any(not engines for (_s, engines, _d), _c in configs)
+        for child in self._max_cfg_box.winfo_children():
+            child.destroy()
+        self._max_cfg_vars = []
+        self._max_cfg_code = {}
+        for k, (cfg, count) in enumerate(configs):
+            sails, engines, derive = cfg
+            # Code STABLE : le rang de la configuration dans l'entrepot, et
+            # non parmi les cochees -- decocher C2 ne renomme pas C3, et le
+            # guide, l'infobulle et la fiche d'un point parlent la meme
+            # langue que cette liste.
+            code = f"C{k + 1}"
+            label = (f"{'+'.join(sails) or '-'} / {'+'.join(engines) or '-'} / "
+                     f"{pe.DERIVE_LABELS.get(derive, '-')}  (n={count})")
+            var = tk.BooleanVar(value=self._max_checked.get(
+                cfg, engine_in or (not engines) or not any_pure_sail))
+            # wraplength : une configuration complete depasse la largeur de
+            # la colonne, et une etiquette tronquee ne dit plus CE QU'ON
+            # COCHE -- elle passe a la ligne au lieu d'etre coupee.
+            cb = tk.Checkbutton(self._max_cfg_box, text=f"{code}  {label}", variable=var,
+                                bg=BG_APP, fg=FG_LABEL, selectcolor=BG_PANEL,
+                                activebackground=BG_APP, font=FONT_LABEL, anchor="w",
+                                justify="left", wraplength=self.MAX_LEFT_WIDTH - 80,
+                                command=self._max_polar_recompute)
+            cb.pack(fill="x", padx=2)
+            # "break" : le second clic du double-clic ne doit pas re-basculer
+            # la case que le double-clic vient de laisser seule cochee.
+            cb.bind("<Double-Button-1>",
+                    lambda _e, c=cfg: (self._max_solo(c), "break")[1])
+            self._max_cfg_vars.append((var, cfg, label))
+            self._max_cfg_code[cfg] = code
+        if getattr(self, "_current_step", None) == "polaires":
+            self._max_polar_recompute()
+
+    def _max_check_all(self, value):
+        for var, _cfg, _lbl in self._max_cfg_vars:
+            var.set(value)
+        self._max_polar_recompute()
+
+    def _max_solo(self, cfg):
+        """Double-clic sur une configuration : elle seule -- sa polaire a
+        elle, sans concurrence."""
+        for var, c, _lbl in self._max_cfg_vars:
+            var.set(c == cfg)
+        self._max_polar_recompute()
+
+    def _export_csv_all(self):
+        session_ids = self._included_session_ids()
+        configs = self.persistent_store.configs(session_ids=session_ids)
+        if not configs:
+            messagebox.showinfo("Export", "L'entrepot cumulatif est vide (ou aucune passe incluse).",
+                                parent=self)
+            return
+        # Les reglages ENREGISTRES, comme le trace et les autres exports de la
+        # page -- et non les champs de la page Parametres, qui peuvent porter
+        # une saisie pas encore enregistree (voire invalide).
+        twa_bin = float(self.config_data["twa_bin_deg"])
+        tws_bin = float(self.config_data["tws_bin_kn"])
+        symmetric = bool(self.config_data["symmetric_port_starboard"])
+        stat = self.config_data["aggregation_stat"]
+        configs_tables, confidences = [], []
+        for (sails, engines, derive), _count in configs:
+            twa_values, tws_values, grid, counts = self.persistent_store.table(
+                sails, engines, derive=derive, twa_bin_deg=twa_bin, tws_bin_kn=tws_bin, symmetric=symmetric,
+                stat=stat, session_ids=session_ids)
+            if twa_values:
+                configs_tables.append((sails, engines, derive, twa_values, tws_values, grid, counts))
+                confidences.append(self.persistent_store.confidence_table(
+                    sails, engines, derive=derive, twa_bin_deg=twa_bin, tws_bin_kn=tws_bin,
+                    symmetric=symmetric, session_ids=session_ids)[2])
+        path = filedialog.asksaveasfilename(
+            defaultextension=".csv", filetypes=[("CSV", "*.csv")],
+            initialfile="polaires_toutes_configs.csv", parent=self)
+        if not path:
+            return
+        content = pe.format_csv_table(configs_tables, confidences=confidences)
+        with open(path, "w", encoding="utf-8", newline="") as fh:
+            fh.write(content)
+        messagebox.showinfo("Export", f"Fichier exporte :\n{path}", parent=self)
 
     def _close_max_cell_details(self):
         if getattr(self, "_max_detail_win", None) is not None:
@@ -6779,7 +6096,9 @@ class App(tk.Tk):
     def _max_polar_recompute(self):
         """(Re)construit la table max selon les configurations cochees et
         retrace. Appele a chaque coche/decoche : la page repond du tac au
-        tac, comme le trace principal."""
+        tac."""
+        if not hasattr(self, "_max_ax"):
+            return
         chosen = [(cfg, lbl) for var, cfg, lbl in self._max_cfg_vars if var.get()]
         cfg_list = [cfg for cfg, _lbl in chosen]
         labels = [lbl for _cfg, lbl in chosen]
@@ -6801,15 +6120,18 @@ class App(tk.Tk):
             except (tk.TclError, ValueError):
                 slope = 1.5
             grid, clipped, n_clip = pe.clip_polar_slope(twa_values, grid, slope)
-        if hasattr(self, "_max_clip_lbl"):
-            self._max_clip_lbl.configure(
-                text=("" if not self._max_clip_var.get() else
-                      (f"{n_clip} case(s) rabaissee(s) par l'ecretage." if n_clip
-                       else "Aucune pointe a ecreter a ce seuil.")))
+        clip_txt = ("" if not self._max_clip_var.get() else
+                    (f"{n_clip} case(s) rabaissee(s) par l'ecretage." if n_clip
+                     else "Aucune pointe a ecreter a ce seuil."))
+        self._max_clip_lbl.configure(text=clip_txt)
+        if clip_txt:
+            self._max_clip_lbl.pack(fill="x", padx=6, pady=(0, 4))
+        else:
+            self._max_clip_lbl.pack_forget()
         mask = [[False] * len(r) for r in grid]
         if self._max_fill_var.get() and grid:
             grid, mask = pe.fill_polar_holes(twa_values, grid)
-        # Le reglage d'ecretage suit l'utilisateur d'une ouverture a l'autre :
+        # Le reglage d'ecretage suit l'utilisateur d'une session a l'autre :
         # c'est un choix de methode, pas un geste a refaire chaque fois.
         try:
             self.config_data["max_polar_clip_enabled"] = bool(self._max_clip_var.get())
@@ -6817,100 +6139,253 @@ class App(tk.Tk):
             pcfg.save_config(self.config_data)
         except (tk.TclError, ValueError, OSError):
             pass
+        self._max_codes = [self._max_cfg_code.get(cfg, "?") for cfg in cfg_list]
+        self._max_conf = self._max_confidence_grid(
+            cfg_list, twa_values, tws_values, winners, twa_bin, tws_bin, symmetric)
         self._max_result = (twa_values, tws_values, grid, counts, winners, mask,
                             labels, clipped)
+        self._max_polar_refresh_title(cfg_list, labels)
         self._max_polar_redraw(symmetric)
         self._max_polar_refresh_guide()
         # Une fiche de point encore ouverte decrirait l'ANCIENNE table :
         # fermee plutot que laissee mentir.
         self._close_max_cell_details()
 
+    def _max_confidence_grid(self, cfg_list, twa_values, tws_values, winners,
+                             twa_bin, tws_bin, symmetric):
+        """Indice de confiance de chaque case de la table max : celui de la
+        configuration GAGNANTE, seule a l'avoir produite, calcule sur
+        exactement le meme decoupage (voir PolarSampleStore._cells).
+        Purement informatif : il donne leur taille aux points, il ne
+        retranche ni ne modifie aucune vitesse."""
+        session_ids = self._included_session_ids()
+        per_cfg = {}
+        for ci in {w for row in winners for w in row if w is not None}:
+            sails, engines, derive = cfg_list[ci]
+            t_axis, w_axis, conf = self.persistent_store.confidence_table(
+                sails, engines, derive=derive, twa_bin_deg=twa_bin, tws_bin_kn=tws_bin,
+                symmetric=symmetric, session_ids=session_ids)
+            # Les axes d'une configuration ne couvrent pas forcement toute la
+            # grille max : la case se retrouve par sa VALEUR d'angle et de
+            # vent, jamais par son indice.
+            per_cfg[ci] = ({v: k for k, v in enumerate(t_axis)},
+                           {v: k for k, v in enumerate(w_axis)}, conf)
+        out = [[None] * len(tws_values) for _ in twa_values]
+        for i, twa in enumerate(twa_values):
+            for j, tws in enumerate(tws_values):
+                entry = per_cfg.get(winners[i][j])
+                if entry is None:
+                    continue
+                ii, jj = entry[0].get(twa), entry[1].get(tws)
+                conf = entry[2]
+                if ii is not None and jj is not None and ii < len(conf) and jj < len(conf[ii]):
+                    out[i][j] = conf[ii][jj]
+        return out
+
+    def _max_code_of(self, ci):
+        """Code stable (C1, C2...) de la ci-eme configuration de la table."""
+        if ci is not None and 0 <= ci < len(self._max_codes):
+            return self._max_codes[ci]
+        return "-"
+
+    def _max_polar_refresh_title(self, cfg_list, labels):
+        """En-tete du trace : ce qu'on regarde. Une seule configuration
+        cochee, c'est SA polaire -- l'en-tete dit alors sa maturite et ce
+        qui n'a jamais ete mesure, c'est-a-dire ou aller chercher des
+        donnees."""
+        if not self._max_cfg_vars:
+            txt = ("Entrepot vide (ou aucune passe incluse) : traitez d'abord une "
+                   "session -- la polaire se tracera ici automatiquement.")
+        elif not cfg_list:
+            txt = "Aucune configuration cochee : cochez-en au moins une a gauche."
+        elif len(cfg_list) == 1:
+            sails, engines, derive = cfg_list[0]
+            mat = self.persistent_store.config_confidence(
+                sails, engines, derive=derive,
+                twa_bin_deg=float(self.config_data["twa_bin_deg"]),
+                tws_bin_kn=float(self.config_data["tws_bin_kn"]),
+                symmetric=bool(self.config_data["symmetric_port_starboard"]),
+                session_ids=self._included_session_ids())
+            txt = (f"{self._max_codes[0]} seule : {labels[0]}. Maturite "
+                   f"{mat['score']}/100 ({mat['word']}) -- {mat['solid']} case(s) "
+                   f"solide(s), {mat['usable']} bonne(s), {mat['weak']} fragile(s), "
+                   f"sur {mat['sessions']} sortie(s).")
+            if mat["missing"]:
+                txt += "  Jamais mesure : " + ", ".join(mat["missing"]) + "."
+        else:
+            txt = (f"Meilleure vitesse parmi {len(cfg_list)} configurations "
+                   f"(sur {len(self._max_cfg_vars)}).")
+        self._max_title_lbl.configure(text=txt)
+
     def _max_polar_redraw(self, symmetric):
         twa_values, tws_values, grid, counts, _winners, mask, labels, clipped = self._max_result
         ax = self._max_ax
         ax.clear()
+        if self._max_legend is not None:
+            try:
+                self._max_legend.remove()
+            except (ValueError, AttributeError, NotImplementedError):
+                pass
+            self._max_legend = None
+        self._max_legend_map = {}
+        self._max_legend_px = 0
         ax.set_theta_zero_location("N")
         ax.set_theta_direction(-1)
-        ax.tick_params(colors=FG_LABEL, labelsize=8)
+        ax.tick_params(colors=FG_LABEL, labelsize=9)
         ax.grid(True, color=COLOR_TICK, linestyle="--", linewidth=0.5, alpha=0.6)
         ax.set_facecolor(BG_PANEL)
-        n_cfg = len(labels)
         if not tws_values:
-            self._max_title_lbl.configure(
-                text="Aucune case : cochez au moins une configuration ayant des mesures.")
+            self._apply_max_view()
             self._max_canvas.draw_idle()
             return
-        self._max_title_lbl.configure(
-            text=f"Meilleure vitesse toutes voilures confondues -- {n_cfg} configuration(s) "
-                 "en concurrence. Points pleins : mesure ; creux : interpolation ; "
-                 "croix : pointe ecretee. Survolez un point pour son detail.")
         max_radius = 0.0
+        handles, names, shown = [], [], []
         for j, tws in enumerate(tws_values):
-            pts = [(twa_values[i], grid[i][j], mask[i][j], clipped[i][j])
+            pts = [(twa_values[i], grid[i][j], mask[i][j], clipped[i][j],
+                    ((self._max_conf[i][j] or {}).get("score", 0)
+                     if i < len(self._max_conf) else 0))
                    for i in range(len(twa_values)) if grid[i][j] is not None]
             if not pts:
                 continue
             pts.sort(key=lambda p: p[0])
             color = TWS_COLORS[j % len(TWS_COLORS)]
-            thetas = [math.radians(t) for t, _v, _m, _c in pts]
-            radii = [v for _t, v, _m, _c in pts]
+            thetas = [math.radians(p[0]) for p in pts]
+            radii = [p[1] for p in pts]
+            # L'echelle tient compte des vents masques : masquer une courbe
+            # ne doit pas faire bondir les autres, la comparaison avant/apres
+            # garde ainsi un sens.
             max_radius = max(max_radius, max(radii))
+            hidden = tws in self._max_hidden_tws
+            handles.append(Line2D([], [], color=color, linewidth=2.0, marker="o",
+                                  markersize=4, alpha=(0.25 if hidden else 1.0)))
+            names.append(f"{tws:g} nds")
+            shown.append(tws)
+            if hidden:
+                continue
             if symmetric:
                 ax.plot([-t for t in reversed(thetas)], list(reversed(radii)),
-                        linewidth=1.2, color=color)
-                ax.plot(thetas, radii, linewidth=1.2, color=color, label=f"TWS {tws:g} nds")
+                        linewidth=1.3, color=color)
+                ax.plot(thetas, radii, linewidth=1.3, color=color)
                 sides = ((thetas, pts), ([-t for t in thetas], pts))
             else:
-                ax.plot(thetas, radii, linewidth=1.2, color=color, label=f"TWS {tws:g} nds")
+                ax.plot(thetas, radii, linewidth=1.3, color=color)
                 sides = ((thetas, pts),)
             for th_list, pt_list in sides:
-                meas = [(th, v) for th, (_t, v, m, c) in zip(th_list, pt_list)
+                meas = [(th, v, sc) for th, (_t, v, m, c, sc) in zip(th_list, pt_list)
                         if not m and not c]
-                interp = [(th, v) for th, (_t, v, m, c) in zip(th_list, pt_list) if m]
-                clip = [(th, v) for th, (_t, v, m, c) in zip(th_list, pt_list)
+                interp = [(th, v) for th, (_t, v, m, c, _sc) in zip(th_list, pt_list) if m]
+                clip = [(th, v) for th, (_t, v, m, c, _sc) in zip(th_list, pt_list)
                         if c and not m]
+                # La taille d'un point mesure suit l'INDICE DE CONFIANCE de sa
+                # case, et non le simple nombre de mesures : 200 mesures prises
+                # dans un seul bord de dix minutes ne valent pas 20 mesures
+                # reparties sur huit sorties, et le trace doit le montrer
+                # plutot que le masquer. 6 pt minimum pour rester visible.
                 if meas:
-                    ax.scatter([p[0] for p in meas], [p[1] for p in meas], s=14,
+                    ax.scatter([p[0] for p in meas], [p[1] for p in meas],
+                               s=[6.0 + 36.0 * (p[2] / 100.0) for p in meas],
                                color=color, edgecolors="none", zorder=3)
                 if interp:
-                    ax.scatter([p[0] for p in interp], [p[1] for p in interp], s=14,
+                    ax.scatter([p[0] for p in interp], [p[1] for p in interp], s=16,
                                facecolors="none", edgecolors=color, zorder=3)
                 if clip:
-                    ax.scatter([p[0] for p in clip], [p[1] for p in clip], s=26,
+                    ax.scatter([p[0] for p in clip], [p[1] for p in clip], s=28,
                                marker="x", color=color, linewidths=1.0, zorder=4)
+        # Graduations angulaires en ANGLE DE VENT (0-180 de chaque bord) et
+        # non en 0-360 : le demi-cercle babord porte des angles negatifs
+        # (-90 = travers babord), que matplotlib etiquetterait "270 deg" --
+        # un cap, alors qu'une polaire ne parle jamais que d'angles au vent.
         ticks = [i * math.pi / 4.0 for i in range(8)]
         ax.set_xticks(ticks)
         ax.set_xticklabels(
             [f"{abs(int(round(math.degrees(((t + math.pi) % (2 * math.pi)) - math.pi))))}°"
              for t in ticks])
+        # Un demi-noeud d'air au-dela du point le plus rapide : sans cela, un
+        # point pose pile sur la valeur max se colle au trait de bordure.
         if max_radius > 0:
             ax.set_rmax(max_radius + 0.5)
+        # Legende des vents A DROITE du cercle, ancree a la FIGURE et non aux
+        # axes : elle ne bouge pas au zoom, et sa hauteur ne retranche rien a
+        # celle du trace -- posee sous le cercle, elle grandissait avec le
+        # nombre de vents et ecrasait la polaire. Cliquer un vent masque sa
+        # courbe, ou la rend : une polaire a quinze courbes se lit mieux a
+        # cinq.
+        ncol = 1 if len(handles) <= 14 else 2
+        self._max_legend_px = 96 * ncol
+        leg = self._max_fig.legend(handles, names, loc="upper right",
+                                   bbox_to_anchor=(0.995, 0.99), ncol=ncol,
+                                   title="Vent reel", fontsize=8, title_fontsize=8,
+                                   facecolor=BG_PANEL, edgecolor=COLOR_TICK,
+                                   framealpha=1.0)
+        for text in leg.get_texts():
+            text.set_color(FG_LABEL)
+        leg.get_title().set_color(FG_LABEL)
+        leg_handles = (getattr(leg, "legend_handles", None)
+                       or getattr(leg, "legendHandles", None) or [])
+        for handle, text, tws in zip(leg_handles, leg.get_texts(), shown):
+            for artist in (handle, text):
+                artist.set_picker(True)
+                self._max_legend_map[artist] = tws
+        self._max_legend = leg
         # Le zoom/deplacement en cours SURVIT au retrace : cocher une
         # configuration ne doit pas rejeter l'utilisateur a la vue de
         # depart sans qu'il l'ait demande.
         self._apply_max_view()
-        legend = ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.05),
-                           ncol=max(1, min(len(tws_values), 6)),
-                           facecolor=BG_PANEL, edgecolor=COLOR_TICK, fontsize=8)
-        for text in legend.get_texts():
-            text.set_color(FG_LABEL)
         self._max_canvas.draw_idle()
+
+    def _on_max_legend_pick(self, event):
+        """Clic sur un vent de la legende : sa courbe se masque, ou revient.
+        Le symbole et le texte d'une meme entree sont tous deux cliquables --
+        un seul clic peut donc les toucher l'un et l'autre : un clic ne
+        bascule qu'une fois.
+
+        Seul un clic GAUCHE compte : matplotlib emet aussi un pick a la
+        molette et aux autres boutons -- zoomer au-dessus de la legende
+        masquait sinon un vent a chaque cran."""
+        tws = self._max_legend_map.get(event.artist)
+        me = event.mouseevent
+        if (tws is None or not self._max_result
+                or getattr(me, "name", "") != "button_press_event"
+                or getattr(me, "button", None) != 1):
+            return
+        if me is self._max_pick_mouse:
+            return
+        # Retenu pour _on_max_polar_press, qui recoit ce MEME evenement juste
+        # apres : c'est lui qui saura que ce clic visait la legende.
+        self._max_pick_mouse = me
+        self._max_hidden_tws ^= {tws}
+        # Retrace APRES l'evenement : la legende qu'on est en train de
+        # parcourir ne doit pas etre detruite sous ses pieds.
+        self.after_idle(lambda: self._max_polar_redraw(
+            bool(self.config_data["symmetric_port_starboard"])))
 
     # Facteur applique a chaque cran de molette. 1,15 : assez pour qu'un
     # cran se voie, assez peu pour viser sans depasser.
     MAX_POLAR_ZOOM_STEP = 1.15
     MAX_POLAR_ZOOM_MAX = 8.0
+    # Air autour du cercle, en pouces (34 px a 100 dpi) : de quoi loger les
+    # graduations d'angle qui debordent du cercle, en haut comme en bas.
+    MAX_POLAR_MARGIN_IN = 0.34
 
     def _max_view_base(self):
-        """Cote du cadre du trace, en fractions de figure, a l'echelle 1.
+        """Cadre du trace a l'echelle 1, en fractions de figure : largeur,
+        hauteur, et centre (x, y) de la zone ou il se loge -- ce que la
+        legende des vents laisse libre a droite.
 
         CARRE : une polaire garde son aspect quoi qu'il arrive, et un cadre
         rectangulaire ferait flotter le cercle a l'interieur -- le
         deplacement deviendrait imprevisible, le curseur ne suivrait plus le
         dessin."""
         w_in, h_in = self._max_fig.get_size_inches()
-        side = min(w_in, h_in) * 0.92
-        return side / max(w_in, 1e-6), side / max(h_in, 1e-6)
+        w_in, h_in = max(float(w_in), 1e-6), max(float(h_in), 1e-6)
+        leg_in = min(self._max_legend_px / float(self._max_fig.get_dpi() or 100.0),
+                     w_in * 0.3)
+        avail_w = max(w_in - leg_in, 1e-6)
+        # Marge FIXE, et non proportionnelle : les graduations 0 et 180 deg
+        # debordent du cercle d'une hauteur de texte, qui ne grandit pas avec
+        # lui -- une marge en pourcentage les rognait sur un petit ecran.
+        side = max(min(avail_w, h_in) - 2.0 * self.MAX_POLAR_MARGIN_IN, 0.5)
+        return side / w_in, side / h_in, (avail_w / 2.0) / w_in, 0.5
 
     def _apply_max_view(self):
         """Place le cadre du trace selon le zoom et le deplacement courants.
@@ -6918,18 +6393,20 @@ class App(tk.Tk):
         La vue retient le point du DESSIN (en fraction du cadre) qu'on veut
         garder au centre de la figure : c'est ce qui permet de zoomer sous
         le curseur sans que l'image parte sur le cote."""
-        bw, bh = self._max_view_base()
+        bw, bh, xc, yc = self._max_view_base()
         view = getattr(self, "_max_view", None)
         if not view:
-            self._max_ax.set_position([0.5 - bw / 2.0, 0.5 - bh / 2.0, bw, bh])
+            self._max_ax.set_position([xc - bw / 2.0, yc - bh / 2.0, bw, bh])
         else:
             s_, cx, cy = view["scale"], view["cx"], view["cy"]
             w, h = bw * s_, bh * s_
-            self._max_ax.set_position([0.5 - cx * w, 0.5 - cy * h, w, h])
+            self._max_ax.set_position([xc - cx * w, yc - cy * h, w, h])
         if hasattr(self, "_max_zoom_lbl"):
             self._max_zoom_lbl.configure(
-                text=("Molette : zoom  |  glisser : se deplacer  |  double-clic : "
-                      "vue entiere"
+                text=("Points pleins : mesure (taille = confiance)  -  creux : interpolation  -  "
+                      "croix : pointe ecretee.     Survol : detail du point  |  clic : sa fiche  |  "
+                      "molette : zoom  |  glisser : se deplacer  |  double-clic : vue "
+                      "entiere  |  clic sur un vent de la legende : le masquer"
                       + (f"   (x{view['scale']:.1f})" if view else "")))
 
     def _max_cursor_in_axes(self, event):
@@ -6986,6 +6463,10 @@ class App(tk.Tk):
     def _on_max_polar_press(self, event):
         if getattr(event, "button", None) != 1:
             return
+        # Le pick de la legende a vu passer ce meme evenement juste avant
+        # (matplotlib le traite en premier) : ce clic-la n'est pas pour une
+        # case. Recalcule a CHAQUE clic, le drapeau ne peut pas rester leve.
+        self._max_legend_click = event is self._max_pick_mouse
         # Point de depart memorise dans tous les cas : au relachement, un
         # deplacement quasi nul est un CLIC (detail de la case), un vrai
         # deplacement etait un glisser (panoramique du zoom).
@@ -6997,6 +6478,10 @@ class App(tk.Tk):
         self._max_drag = None
         press = getattr(self, "_max_press_xy", None)
         self._max_press_xy = None
+        if self._max_legend_click:
+            # Le clic visait la legende (voir _on_max_legend_pick), pas une case.
+            self._max_legend_click = False
+            return
         if (press is None or event.x is None
                 or math.hypot(event.x - press[0], event.y - press[1]) > 5):
             return
@@ -7010,7 +6495,7 @@ class App(tk.Tk):
         if not self._max_drag or not self._max_view:
             return False
         x0, y0, cx0, cy0 = self._max_drag
-        bw, bh = self._max_view_base()
+        bw, bh, _xc, _yc = self._max_view_base()
         fw, fh = self._max_canvas.get_width_height()
         s_ = self._max_view["scale"]
         self._max_view["cx"] = cx0 - (event.x - x0) / max(fw * bw * s_, 1e-9)
@@ -7063,7 +6548,8 @@ class App(tk.Tk):
         origin = ("interpolee" if mask[i][j]
                   else ("mesuree, pointe ecretee" if clipped[i][j] else "mesuree"))
         ci = winners[i][j]
-        who = labels[ci] if ci is not None else "-- (interpolation)"
+        who = (f"{self._max_code_of(ci)} = {labels[ci]}" if ci is not None
+               else "-- (interpolation)")
         lines = [f"TWA {twa_values[i]:g}deg   TWS {tws_values[j]:g} nds",
                  f"{v:.2f} nds  ({origin})",
                  f"voilure : {who}"]
@@ -7104,9 +6590,11 @@ class App(tk.Tk):
         r = event.ydata
         best = None
         for i, twa in enumerate(twa_values):
-            for j, _tws in enumerate(tws_values):
+            for j, tws in enumerate(tws_values):
                 v = grid[i][j]
-                if v is None:
+                # Un vent masque dans la legende n'a plus de points a l'ecran :
+                # rien a y designer.
+                if v is None or tws in self._max_hidden_tws:
                     continue
                 d = math.hypot(math.radians(abs(twa) - deg) * max(r, 0.5), v - r)
                 if best is None or d < best[0]:
@@ -7117,45 +6605,27 @@ class App(tk.Tk):
 
     def _max_cell_confidence(self, i, j):
         """Confiance de la case (i, j) de la polaire max : celle de la
-        configuration GAGNANTE, seule a l'avoir produite."""
-        if not self._max_result:
+        configuration GAGNANTE, seule a l'avoir produite (calculee au
+        recalcul de la table, voir _max_confidence_grid)."""
+        if not self._max_result or i >= len(self._max_conf) or j >= len(self._max_conf[i]):
             return None
-        twa_values, tws_values, _g, _c, winners, _m, _l, _cl = self._max_result
-        ci = winners[i][j]
-        chosen = [cfg for var, cfg, _lbl in self._max_cfg_vars if var.get()]
-        if ci is None or ci >= len(chosen):
-            return None
-        sails, engines, derive = chosen[ci]
-        try:
-            _t, _w, conf = self.persistent_store.confidence_table(
-                sails, engines, derive=derive,
-                twa_bin_deg=float(self.config_data["twa_bin_deg"]),
-                tws_bin_kn=float(self.config_data["tws_bin_kn"]),
-                symmetric=bool(self.config_data["symmetric_port_starboard"]),
-                session_ids=self._included_session_ids())
-        except Exception:
-            return None
-        # Les axes d'une configuration ne couvrent pas forcement toute la
-        # grille max : on retrouve la case par sa VALEUR d'angle et de vent,
-        # jamais par son indice.
-        try:
-            ii = _t.index(twa_values[i])
-            jj = _w.index(tws_values[j])
-        except ValueError:
-            return None
-        return conf[ii][jj] if ii < len(conf) and jj < len(conf[ii]) else None
+        return self._max_conf[i][j]
 
     def _max_polar_refresh_guide(self):
-        twa_values, tws_values, _grid, _counts, winners, mask, labels, _clip = self._max_result
+        twa_values, tws_values, _grid, _counts, winners, mask, _labels, _clip = self._max_result
         tree = self._max_guide
         tree.delete(*tree.get_children())
         cols = ["twa"] + [f"tws{j}" for j in range(len(tws_values))]
         tree.configure(columns=cols)
         tree.heading("twa", text="TWA \\ TWS")
         tree.column("twa", width=80, anchor="center", stretch=False)
+        # Largeur FIXE : au-dela de ce que la vue peut montrer, le guide
+        # defile horizontalement plutot que d'ecraser ses colonnes.
         for j, tws in enumerate(tws_values):
             tree.heading(f"tws{j}", text=f"{tws:g} nds")
-            tree.column(f"tws{j}", width=64, anchor="center", stretch=True)
+            tree.column(f"tws{j}", width=64, anchor="center", stretch=False)
+        # Les codes sont ceux de la liste de gauche, toujours visible : la
+        # legende "C1 = ..." n'a plus a s'empiler sous le guide.
         for i, twa in enumerate(twa_values):
             row = [f"{twa:g}°"]
             for j in range(len(tws_values)):
@@ -7163,15 +6633,8 @@ class App(tk.Tk):
                 if ci is None:
                     row.append("~" if mask[i][j] else "")
                 else:
-                    row.append(f"C{ci + 1}")
+                    row.append(self._max_code_of(ci))
             tree.insert("", "end", values=row)
-        # UNE LIGNE PAR CONFIGURATION : mises bout a bout, les etiquettes
-        # completes debordaient et le guide devenait indechiffrable -- on
-        # lisait "C3" sans pouvoir savoir de quelle voilure il s'agit.
-        leg = "\n".join(f"C{i + 1} = {lbl}" for i, lbl in enumerate(labels))
-        if leg:
-            leg += "\n(~ = case interpolee, sans gagnante mesuree)"
-        self._max_legend_lbl.configure(text=leg)
 
     def _on_max_guide_click(self, event):
         """Clic dans le guide de voilure : la colonne cliquee designe le
@@ -7225,7 +6688,7 @@ class App(tk.Tk):
             symmetric=bool(self.config_data["symmetric_port_starboard"]),
             stat=stat, session_ids=self._included_session_ids())
 
-        parent = self._max_polar_win or self
+        parent = self
         win = tk.Toplevel(parent)
         self._max_detail_win = win
         self._max_detail_cell = (i, j)
@@ -7268,7 +6731,7 @@ class App(tk.Tk):
             lines.append(f"Valeur retenue : {v:.2f} nds  ({origin})")
             lines.append(f"Statistique    : {self.STAT_LABELS.get(stat, stat)}")
             if ci is not None:
-                lines.append(f"Voilure gagnante : C{ci + 1} = {labels[ci]}")
+                lines.append(f"Voilure gagnante : {self._max_code_of(ci)} = {labels[ci]}")
         tk.Label(f_cell, text="\n".join(lines), **mono).pack(fill="x", padx=6, pady=(0, 6))
         if v is not None and mask[i][j]:
             # Case interpolee : dire ENTRE QUOI. L'interpolation court le
@@ -7289,7 +6752,7 @@ class App(tk.Tk):
                          "Case interpolee.", wraplength="auto")
         if v is not None and clipped[i][j]:
             note(f_cell, "Pointe ECRETEE : la valeur mesuree depassait la pente "
-                         "maximale reglee dans la fenetre principale ; elle a ete "
+                         "maximale reglee sur l'etape Polaires ; elle a ete "
                          "rabaissee au niveau que la pente autorise. La statistique "
                          "d'origine reste visible dans le tableau ci-dessous.",
                  wraplength="auto")
@@ -7316,7 +6779,7 @@ class App(tk.Tk):
                 conf = e["confidence"]
                 spread = ("-" if e["spread"] is None else f"{100 * e['spread']:.0f} %")
                 tv.insert("", "end", values=(
-                    f"C{e['config_index'] + 1}", e["n"],
+                    self._max_code_of(e["config_index"]), e["n"],
                     f"{e['speed']:.2f}" if e["speed"] is not None else "-",
                     f"{e['min']:.2f}", f"{e['median']:.2f}", f"{e['max']:.2f}",
                     spread, f"{conf['level']} {conf['score']}"))
@@ -7399,12 +6862,22 @@ class App(tk.Tk):
                      f"ni interpolation. Le bateau n'a jamais ete observe la.")
             return
         ci = winners[i][j]
-        who = (labels[ci] if ci is not None
+        who = (f"{self._max_code_of(ci)} = {labels[ci]}" if ci is not None
                else "interpolation entre deux voilures mesurees")
         origin = "interpolee" if mask[i][j] else "mesuree"
         self._max_ask_result.configure(
             text=f"Case {twa_values[i]:g}° / {tws_values[j]:g} nds : {v:.2f} nds "
                  f"({origin}).\nVoilure : {who}")
+
+    def _max_export_name(self, default):
+        """Nom propose a l'export : celui de la configuration quand elle est
+        seule cochee -- exporter C1, C2, C3 l'une apres l'autre ne doit pas
+        proposer trois fois le meme fichier."""
+        chosen = [cfg for var, cfg, _lbl in self._max_cfg_vars if var.get()]
+        if len(chosen) != 1:
+            return default
+        sails, engines, derive = chosen[0]
+        return f"polaire_{'-'.join(sails) or 'nu'}_{'-'.join(engines) or 'nu'}_{derive or 'nu'}"
 
     def _max_polar_export_pol(self):
         if not self._max_result or not self._max_result[1]:
@@ -7413,7 +6886,7 @@ class App(tk.Tk):
         twa_values, tws_values, grid, _c, _w, _m, _l, _cl = self._max_result
         path = filedialog.asksaveasfilename(
             defaultextension=".pol", filetypes=[("Fichier polaire", "*.pol")],
-            initialfile="polaire_max_routage.pol", parent=self._max_polar_win)
+            initialfile=self._max_export_name("polaire_max_routage") + ".pol", parent=self)
         if not path:
             return
         # Grille PLEINE : les cases jamais observees passent a 0 -- pour un
@@ -7426,7 +6899,7 @@ class App(tk.Tk):
             "Export", f"Fichier exporte :\n{path}\n\nGrille PLEINE au format Expedition "
                       "(qtVlm, Adrena, OpenCPN...). Les cases sans mesure ni interpolation "
                       "y valent 0 : un routeur y lit 'le bateau ne marche pas la'.",
-            parent=self._max_polar_win)
+            parent=self)
 
     def _max_polar_export_timezero(self):
         """Deux fichiers TimeZero d'un seul geste : la polaire de vitesse et
@@ -7443,7 +6916,7 @@ class App(tk.Tk):
         twa_values, tws_values, grid, _c, winners, _m, labels, _cl = self._max_result
         base = filedialog.asksaveasfilename(
             defaultextension=".xml", filetypes=[("Fichier TimeZero", "*.xml")],
-            initialfile="Allure_Wind_Polar.xml", parent=self._max_polar_win)
+            initialfile="Allure_Wind_Polar.xml", parent=self)
         if not base:
             return
         root, _ext = os.path.splitext(base)
@@ -7472,7 +6945,7 @@ class App(tk.Tk):
                 fh.write(pe.format_timezero_sailset(tws_values, bands_by_tws))
         except OSError as e:
             messagebox.showerror("Export", f"Ecriture impossible :\n{e}",
-                                 parent=self._max_polar_win)
+                                 parent=self)
             return
         unmapped = [c for cfg in chosen for c in cfg[0] if c not in sail_map]
         warn = ""
@@ -7486,7 +6959,7 @@ class App(tk.Tk):
             f"Deux fichiers ecrits :\n\n{polar_path}\n(la polaire de vitesse)\n\n"
             f"{sail_path}\n(la voilure a porter, par cap et par vent)\n\n"
             "Dans TimeZero : bouton TIMEZERO > Ouvrir un fichier polaire, puis "
-            "Parcourir." + warn, parent=self._max_polar_win)
+            "Parcourir." + warn, parent=self)
 
     def _max_polar_export_csv(self):
         if not self._max_result or not self._max_result[1]:
@@ -7495,7 +6968,7 @@ class App(tk.Tk):
         twa_values, tws_values, grid, counts, winners, mask, labels, clipped = self._max_result
         path = filedialog.asksaveasfilename(
             defaultextension=".csv", filetypes=[("CSV", "*.csv")],
-            initialfile="polaire_max_routage.csv", parent=self._max_polar_win)
+            initialfile=self._max_export_name("polaire_max_routage") + ".csv", parent=self)
         if not path:
             return
         import csv as _csv
@@ -7515,7 +6988,7 @@ class App(tk.Tk):
                                      labels[ci] if ci is not None else "-",
                                      counts[i][j] if not mask[i][j] else 0])
         messagebox.showinfo("Export", f"Fichier exporte :\n{path}",
-                            parent=self._max_polar_win)
+                            parent=self)
 
     # ---------------------------------------------------------------
     # Suivi en direct -- vit DANS l'etape Enregistrement, dont il remplace
@@ -8040,853 +7513,6 @@ class App(tk.Tk):
             self.live_anemo_warn_lbl.configure(text="")
 
     # =====================================================================
-    # Statistiques (icone en haut a droite)
-    #
-    # Cette page ne produit AUCUNE polaire et n'enregistre rien : elle lit.
-    # Elle repond a des questions que le reste de l'application ne pose
-    # jamais -- le vent forcit-il, la pression baisse-t-elle, ai-je fait plus
-    # de route cette heure-ci que la precedente -- et elle y repond meme
-    # quand aucune acquisition ne tourne, puisque le tampon glissant, lui,
-    # tourne toujours (voir allure_buffer.py et allure_engine.TrendRecorder).
-    #
-    # La page elle-meme est une page de LECTURE, pas de reglage : ce qu'elle
-    # montre (grandeurs, durees, tableau) se choisit dans la roue dentee >
-    # Statistiques, comme tous les autres reglages de l'application. Le seul
-    # bouton qui reste sur la page est celui dont on se sert en regardant le
-    # resultat : l'echelle de temps des graphes.
-    #
-    # Trois echelles de lecture, volontairement distinctes :
-    #   - les TENDANCES comparent la meme grandeur sur quatre fenetres :
-    #     c'est la comparaison, et non la valeur, qui dit si quelque chose
-    #     est en train de changer ;
-    #   - les GRAPHES donnent la pente -- vent et barometre SEPARES, chacun
-    #     sur sa propre echelle, mais sur le MEME axe de temps ;
-    #   - le TABLEAU PAR TRANCHES donne la forme du temps sur les dernieres
-    #     heures, d'un seul coup d'oeil colore.
-    # =====================================================================
-
-    # Cadences de rafraichissement, en secondes. Les tableaux suivent le
-    # flux, la figure matplotlib beaucoup moins souvent : la redessiner deux
-    # fois par seconde couterait plus cher que tout le reste de la page
-    # reuni, pour un trace qui ne bouge pas a l'oeil.
-    STATS_TABLE_PERIOD_S = 2.0
-    STATS_HOURS_PERIOD_S = 10.0
-    STATS_CURVE_PERIOD_S = 15.0
-
-    # Largeur minimale d'une colonne du tableau par tranches, en pixels :
-    # sert a decider COMBIEN de colonnes tiennent reellement dans la fenetre
-    # (voir _stats_grid_cols). Un tableau qui deborde est un tableau qu'on ne
-    # lit pas -- autant afficher moins de colonnes et qu'elles soient lisibles.
-    STATS_GRID_MIN_COL_PX = 58
-    STATS_GRID_LABEL_PX = 150
-
-    # Etendues proposees par les boutons des graphes, en heures. Des boutons
-    # et non un menu deroulant : changer d'echelle de temps est LE geste de
-    # cette page, il doit se faire d'un clic, l'oeil sur la courbe.
-    STATS_SPAN_PRESETS_H = (1, 3, 6, 12, 24)
-    # Bornes du zoom molette (voir _on_stats_scroll).
-    STATS_MIN_SPAN_S = 600.0
-
-    def _build_step_statistiques(self, parent):
-        outer, inner = make_scrollable(parent, height=1)
-        outer.pack(fill="both", expand=True)
-        self._stats_inner = inner
-        self._stats_last_table = 0.0
-        self._stats_last_hours = 0.0
-        self._stats_last_curve = 0.0
-        # Fenetre de temps VISIBLE des graphes. end=None signifie "suit le
-        # present" (le bord droit est toujours maintenant) ; un panoramique
-        # vers le passe fige end, et les boutons d'etendue ramenent au direct.
-        self._stats_view = {
-            "span_s": float(self.config_data.get("stats_curve_h", 6)) * 3600.0,
-            "end": None,
-        }
-        self._stats_drag = None
-
-        self._build_stats_bar(inner)
-        self._build_stats_trends(inner)
-        self._build_stats_curves(inner)
-        self._build_stats_hours(inner)
-        self._build_stats_grid(inner)
-        self._sync_stats_sections()
-
-    def _stats_fields(self):
-        """Grandeurs a afficher : le choix fait dans les Parametres, croise
-        avec le catalogue reellement connu de cette version, dans l'ordre du
-        catalogue (stable a l'ecran, quel que soit l'ordre du fichier)."""
-        chosen = set(self.config_data.get("stats_fields") or [])
-        fields = [k for k in pe.TREND_KEYS if k in chosen]
-        return fields or [k for k in pe.TREND_KEYS
-                          if k in ("tws", "aws", "twa", "awa", "stw", "sog", "pressure")]
-
-    # ---------- Barre d'etat (fine, pas une section) ----------
-    def _build_stats_bar(self, inner):
-        bar = tk.Frame(inner, bg=BG_PANEL)
-        bar.pack(fill="x", padx=10, pady=(10, 0))
-        row = tk.Frame(bar, bg=BG_PANEL)
-        row.pack(fill="x", padx=10, pady=6)
-        self.stats_state_lbl = tk.Label(row, text="", bg=BG_PANEL, fg=FG_LABEL,
-                                         font=("Segoe UI", 8), anchor="w", justify="left")
-        self.stats_state_lbl.pack(side="left", fill="x", expand=True)
-        # Raccourci vers les reglages de CETTE page : la roue dentee generale
-        # y mene aussi, mais le chemin doit etre evident depuis ici.
-        tk.Button(row, text="Reglages...", command=self._open_stats_settings,
-                  bg=BTN_BG, fg=FG_LABEL, font=FONT_LABEL, padx=10,
-                  cursor="hand2").pack(side="right", padx=(8, 0))
-        self.stats_backfill_btn = tk.Button(
-            row, text="Relire le tampon", command=lambda: self._start_trend_backfill(auto=False),
-            bg=BTN_BG, fg=FG_LABEL, font=FONT_LABEL, padx=10, cursor="hand2")
-        self.stats_backfill_btn.pack(side="right")
-        self.stats_backfill_lbl = tk.Label(bar, text="", bg=BG_PANEL, fg=FG_LABEL_DIM,
-                                            font=("Segoe UI", 8), anchor="w", justify="left")
-        self.stats_backfill_lbl.pack(fill="x", padx=10, pady=(0, 6))
-
-    def _open_stats_settings(self):
-        self._show_step("parametres")
-        self._show_settings_category("statistiques")
-
-    # ---------- 1. Tendances ----------
-    STATS_TREND_COLS = 7  # grandeur + instantane + 4 fenetres + tendance
-
-    def _build_stats_trends(self, inner):
-        f = section(inner, "Tendances")
-        note(f, "La meme grandeur sur quatre durees : c'est l'ecart entre les colonnes qui "
-                "dit si quelque chose change. Une case vide = aucune mesure sur cette duree.",
-             wraplength="auto")
-
-        grid = tk.Frame(f, bg=BG_APP)
-        grid.pack(fill="x", padx=6, pady=(0, 8))
-        self.stats_trend_grid = grid
-        for c in range(1, self.STATS_TREND_COLS):
-            grid.columnconfigure(c, weight=1, uniform="stats")
-        grid.columnconfigure(0, weight=0)
-
-        self.stats_trend_headers = []
-        for c in range(self.STATS_TREND_COLS):
-            lbl = tk.Label(grid, text="", bg=BG_APP, fg=FG_LABEL_DIM,
-                            font=("Segoe UI", 8, "bold"),
-                            anchor="w" if c == 0 else "center")
-            lbl.grid(row=0, column=c, sticky="ew", padx=1, pady=(0, 2))
-            self.stats_trend_headers.append(lbl)
-        tk.Frame(grid, bg=COLOR_BORDER, height=1).grid(
-            row=1, column=0, columnspan=self.STATS_TREND_COLS, sticky="ew", pady=(0, 2))
-
-        # Une ligne par grandeur du catalogue, construite une fois pour
-        # toutes puis simplement masquee (grandeur non choisie, ou jamais
-        # recue) : reconstruire le tableau a chaque rafraichissement le
-        # ferait clignoter deux fois par seconde.
-        self.stats_trend_rows = {}
-        for i, key in enumerate(pe.TREND_KEYS):
-            label, unit, dec, kind = pe.TREND_META[key]
-            name = tk.Label(grid, text=f"{label} ({unit})", bg=BG_APP, fg=FG_LABEL,
-                             font=FONT_LABEL, anchor="w")
-            cells = [StatCell(grid, arrow=(kind != "linear"),
-                              toward=(key in _TREND_ANGLE_TOWARD)) for _ in range(5)]
-            trend_lbl = tk.Label(grid, text="", bg=BG_APP, fg=FG_LABEL_DIM,
-                                  font=("Segoe UI", 8), anchor="center")
-            self.stats_trend_rows[key] = (i + 2, name, cells, trend_lbl)
-
-        self.stats_trend_empty = tk.Label(
-            f, text="", bg=BG_APP, fg=COLOR_ACCENT, font=FONT_LABEL, anchor="w",
-            justify="left", wraplength=760)
-        self.stats_trend_empty.pack(fill="x", padx=6, pady=(0, 8))
-
-    # ---------- 2. Graphes vent / pression ----------
-    def _build_stats_curves(self, inner):
-        f = section(inner, "Vent et pression")
-        self.stats_curve_section = f
-        note(f, "Deux graphes SEPARES -- chacun sa propre echelle -- mais un seul axe de "
-                "temps, commun : zoomer ou se deplacer sur l'un deplace l'autre a "
-                "l'identique. Molette : zoom. Cliquer-glisser : remonter dans le passe. "
-                "Un bouton d'etendue ramene au direct.", wraplength="auto")
-
-        btn_row = tk.Frame(f, bg=BG_APP)
-        btn_row.pack(fill="x", padx=6, pady=(0, 4))
-        tk.Label(btn_row, text="Etendue :", bg=BG_APP, fg=FG_LABEL,
-                 font=FONT_LABEL_BOLD).pack(side="left", padx=(0, 6))
-        self.stats_span_btns = {}
-        for h in self.STATS_SPAN_PRESETS_H:
-            b = tk.Button(btn_row, text=_fmt_span(h * 3600), padx=10, pady=1,
-                          font=FONT_LABEL, relief="flat", bd=1, cursor="hand2",
-                          bg=BTN_BG, fg=FG_LABEL,
-                          command=lambda hh=h: self._stats_set_span(hh))
-            b.pack(side="left", padx=(0, 3))
-            self.stats_span_btns[h] = b
-        self.stats_curve_note_lbl = tk.Label(btn_row, text="", bg=BG_APP, fg=COLOR_ACCENT,
-                                              font=("Segoe UI", 8), anchor="e")
-        self.stats_curve_note_lbl.pack(side="right", fill="x", expand=True)
-
-        self.stats_fig = Figure(figsize=(9.0, 4.6), dpi=100)
-        self.stats_fig.set_facecolor(BG_APP)
-        gs = self.stats_fig.add_gridspec(2, 1, height_ratios=(3.0, 2.0), hspace=0.14)
-        self.stats_ax_wind = self.stats_fig.add_subplot(gs[0])
-        self.stats_ax_press = self.stats_fig.add_subplot(gs[1], sharex=self.stats_ax_wind)
-        # Marges FIXES plutot que tight_layout : celui-ci ne s'entend pas
-        # avec un gridspec partage, et des marges qui bougent a chaque
-        # redessin feraient trembler les graphes pendant un zoom.
-        self.stats_fig.subplots_adjust(left=0.075, right=0.985, top=0.975,
-                                        bottom=0.085, hspace=0.14)
-        self.stats_canvas = FigureCanvasTkAgg(self.stats_fig, master=f)
-        widget = self.stats_canvas.get_tk_widget()
-        widget.configure(bg=BG_APP, height=430)
-        widget.pack(fill="x", padx=6, pady=(0, 8))
-        self.stats_canvas.mpl_connect("scroll_event", self._on_stats_scroll)
-        self.stats_canvas.mpl_connect("button_press_event", self._on_stats_press)
-        self.stats_canvas.mpl_connect("motion_notify_event", self._on_stats_motion)
-        self.stats_canvas.mpl_connect("button_release_event", self._on_stats_release)
-        self._sync_stats_span_buttons()
-
-    # ----- Fenetre de temps commune aux deux graphes -----
-    def _stats_set_span(self, hours):
-        """Bouton d'etendue : fixe l'echelle ET revient au direct (bord droit
-        = maintenant). C'est aussi la sortie de secours d'un zoom ou d'un
-        panoramique qui a emmene trop loin."""
-        self._stats_view = {"span_s": float(hours) * 3600.0, "end": None}
-        cfg = dict(self.config_data)
-        cfg["stats_curve_h"] = int(hours)
-        self.config_data = pcfg.fixup(cfg)
-        try:
-            pcfg.save_config(self.config_data)
-        except OSError:
-            pass
-        self._sync_stats_span_buttons()
-        self._stats_last_curve = time.time()
-        self._refresh_stats_curves(time.time())
-
-    def _sync_stats_span_buttons(self):
-        """Le bouton de l'etendue ACTIVE s'allume comme un onglet -- mais
-        seulement en mode direct : une vue zoomee ou figee n'allume rien,
-        puisqu'aucun preset ne la decrit."""
-        view = getattr(self, "_stats_view", None)
-        if view is None or not hasattr(self, "stats_span_btns"):
-            return
-        for h, btn in self.stats_span_btns.items():
-            active = (view["end"] is None
-                      and abs(view["span_s"] - h * 3600.0) < 1.0)
-            btn.configure(bg=BG_NAV_ACTIVE if active else BTN_BG,
-                          fg=FG_ON_ACCENT if active else FG_LABEL)
-
-    def _stats_clamp_view(self, span_s, end, now):
-        horizon = max(3600.0, self.config_data.get("stats_history_h", 6) * 3600.0)
-        span_s = max(self.STATS_MIN_SPAN_S, min(span_s, horizon))
-        if end is not None:
-            oldest = now - horizon
-            end = min(end, now)
-            end = max(end, oldest + span_s)
-            # Bord droit revenu au present : on repasse en mode direct, la
-            # vue recommence a suivre le flux toute seule.
-            if end >= now - 5.0:
-                end = None
-        return span_s, end
-
-    def _stats_axes_of_event(self, event):
-        return event.inaxes if event.inaxes in (
-            getattr(self, "stats_ax_wind", None), getattr(self, "stats_ax_press", None)) else None
-
-    def _on_stats_scroll(self, event):
-        """Molette = zoom de l'axe de temps, autour du point vise, applique
-        aux DEUX graphes a la fois (ils partagent la meme fenetre)."""
-        if self._stats_axes_of_event(event) is None or event.xdata is None:
-            return
-        now = time.time()
-        view = self._stats_view
-        factor = 0.75 if event.step > 0 else 1.0 / 0.75
-        old_span = view["span_s"]
-        end = view["end"] if view["end"] is not None else now
-        # Garder le point vise au meme endroit de l'ecran : la distance
-        # entre ce point et le bord droit est simplement mise a l'echelle.
-        anchor = event.xdata
-        new_span = old_span * factor
-        new_end = anchor + (end - anchor) * (new_span / old_span)
-        new_span, new_end = self._stats_clamp_view(new_span, new_end, now)
-        self._stats_view = {"span_s": new_span, "end": new_end}
-        self._sync_stats_span_buttons()
-        self._stats_last_curve = now
-        self._refresh_stats_curves(now)
-
-    def _on_stats_press(self, event):
-        if event.button != 1 or self._stats_axes_of_event(event) is None:
-            return
-        view = self._stats_view
-        end = view["end"] if view["end"] is not None else time.time()
-        self._stats_drag = {"x_px": event.x, "end0": end, "span": view["span_s"],
-                            "moved": False}
-
-    def _on_stats_motion(self, event):
-        drag = self._stats_drag
-        if drag is None or event.x is None:
-            return
-        ax = getattr(self, "stats_ax_wind", None)
-        if ax is None:
-            return
-        bbox = ax.get_window_extent()
-        width_px = max(1.0, bbox.width)
-        dt = (drag["x_px"] - event.x) * drag["span"] / width_px
-        if abs(event.x - drag["x_px"]) > 3:
-            drag["moved"] = True
-        now = time.time()
-        span, end = self._stats_clamp_view(drag["span"], drag["end0"] + dt, now)
-        self._stats_view = {"span_s": span, "end": end}
-        self._sync_stats_span_buttons()
-        # Redessin immediat mais au plus 10 fois par seconde : le pointeur
-        # bouge bien plus vite que matplotlib ne redessine.
-        if now - self._stats_last_curve >= 0.1:
-            self._stats_last_curve = now
-            self._refresh_stats_curves(now)
-
-    def _on_stats_release(self, _event):
-        if self._stats_drag is not None:
-            self._stats_drag = None
-            now = time.time()
-            self._stats_last_curve = now
-            self._refresh_stats_curves(now)
-
-    # ---------- 3. Distance par heure pleine ----------
-    def _build_stats_hours(self, inner):
-        f = section(inner, "Distance sur le fond, heure par heure")
-        note(f, "Vitesse fond integree, decoupee aux heures pleines du bord. Une heure au "
-                "flux interrompu affiche sa couverture : sa distance ne vaut pas une heure "
-                "entiere.", wraplength="auto")
-        self.stats_hours_frame = tk.Frame(f, bg=BG_APP)
-        self.stats_hours_frame.pack(fill="x", padx=6, pady=(0, 4))
-        self.stats_hours_total_lbl = tk.Label(f, text="", bg=BG_APP, fg=FG_LABEL,
-                                               font=FONT_LABEL_BOLD, anchor="w")
-        self.stats_hours_total_lbl.pack(fill="x", padx=6, pady=(0, 8))
-        self._stats_hour_cards = []
-
-    # ---------- 4. Tableau par tranches ----------
-    def _build_stats_grid(self, inner):
-        f = section(inner, "Tableau des dernieres heures")
-        self.stats_grid_section = f
-        note(f, "Une table de prevision tournee vers le passe : ce qui a reellement ete "
-                "mesure, tranche par tranche, colore par la force du vent.",
-             wraplength="auto")
-        self.stats_grid_note_lbl = tk.Label(f, text="", bg=BG_APP, fg=FG_LABEL_DIM,
-                                             font=("Segoe UI", 8), anchor="w")
-        self.stats_grid_note_lbl.pack(fill="x", padx=6)
-        self.stats_grid_frame = tk.Frame(f, bg=BG_APP)
-        self.stats_grid_frame.pack(fill="x", padx=6, pady=(2, 8))
-        self._stats_grid_shape = None      # (colonnes, lignes) reellement construits
-        self._stats_grid_cells = {}
-        self._stats_grid_headers = []
-
-    def _sync_stats_sections(self):
-        """Montre ou cache les blocs selon les Parametres. Le tableau par
-        tranches est le seul optionnel ; il est en fin de page, un pack()
-        simple le remet donc exactement a sa place."""
-        if not hasattr(self, "stats_grid_section"):
-            return
-        if self.config_data.get("stats_show_grid", True):
-            if not self.stats_grid_section.winfo_manager():
-                self.stats_grid_section.pack(fill="x", padx=10, pady=(10, 4))
-        else:
-            self.stats_grid_section.pack_forget()
-
-    # ---------- Reglages (lus depuis config_data ; edites dans la roue
-    # dentee > Statistiques, voir _build_settings_statistiques) ----------
-    def _stats_windows(self):
-        """Les quatre fenetres du tableau des tendances. TOUJOURS quatre :
-        le tableau a quatre colonnes, construites une fois pour toutes, et
-        un fichier de reglages venu d'ailleurs ne doit pas pouvoir laisser
-        une colonne orpheline."""
-        wins = [w for w in (self.config_data.get("stats_windows") or []) if w]
-        for cand in pe.TREND_WINDOWS_DEFAULT:
-            if len(wins) >= 4:
-                break
-            if cand not in wins:
-                wins.append(cand)
-        return sorted(wins)[:4]
-
-    # ---------- Remplissage depuis le tampon ----------
-    def _start_trend_backfill(self, auto=False):
-        """Rejoue le tampon glissant dans un enregistreur NEUF, en tache de
-        fond, puis le verse dans l'enregistreur vivant (voir
-        TrendRecorder.absorb). Sans cela, une "moyenne sur 60 minutes"
-        consultee cinq minutes apres le lancement ne porterait que sur cinq
-        minutes -- alors que le tampon, lui, sait tout."""
-        with self._trend_backfill_lock:
-            if self._trend_backfill_state == "en cours":
-                return False
-            if auto and self._trend_backfill_state != "jamais":
-                return False  # une seule relecture automatique par lancement
-            self._trend_backfill_state = "en cours"
-            self._trend_backfill_msg = "Relecture du tampon en cours..."
-        if not self.config_data.get("buffer_enabled", True):
-            with self._trend_backfill_lock:
-                self._trend_backfill_state = "echec"
-                self._trend_backfill_msg = (
-                    "Tampon desactive : les statistiques ne portent que sur ce qui a ete recu "
-                    "depuis le lancement. Activez-le dans la roue dentee > Sources & tampon.")
-            self._refresh_stats(force=True)
-            return False
-        span_h = max(int(self.config_data.get("stats_history_h", 6)),
-                     int(self.config_data.get("stats_hours_shown", 12)) + 1)
-        th = threading.Thread(target=self._trend_backfill_worker, args=(span_h,), daemon=True)
-        self._trend_backfill_thread = th
-        th.start()
-        self._refresh_stats(force=True)
-        return True
-
-    def _trend_backfill_worker(self, span_h):
-        """Fil de fond. Ne touche a AUCUN widget : il depose son resultat et
-        laisse la boucle Tk le prendre (voir _finish_trend_backfill)."""
-        try:
-            now = time.time()
-            cfg = self.config_data
-            rec = pe.TrendRecorder(horizon_s=cfg.get("stats_history_h", 6) * 3600.0)
-            engine = pe.PolarEngine(port_priority=cfg.get("priority"),
-                                     source_by_type=cfg.get("sources"),
-                                     allow_fallback=cfg.get("source_fallback", True))
-            engine.collecting = False
-            engine.trend = rec
-            n = 0
-            last = None
-            for t, port, raw in self.buffer.iter_range(now - span_h * 3600.0, now):
-                engine.ingest_line(t, raw, port=port)
-                n += 1
-                last = t
-                if n % 5000 == 0:
-                    # Ce fil est presque uniquement du calcul Python : sans
-                    # cette respiration, il accapare l'interpreteur (GIL) et
-                    # l'interface rame pendant toute la relecture d'un gros
-                    # tampon. Un souffle par 5000 trames suffit -- invisible
-                    # sur la duree totale, decisif pour la fluidite.
-                    time.sleep(0.001)
-            self._trend_backfill_result = (rec, n, last, None)
-        except Exception as exc:   # le fil ne doit jamais mourir en silence
-            log_exception(type(exc), exc, exc.__traceback__, "relecture du tampon")
-            self._trend_backfill_result = (None, 0, None, str(exc))
-        try:
-            self.after(0, self._finish_trend_backfill)
-        except RuntimeError:
-            pass  # application en train de se fermer
-
-    def _finish_trend_backfill(self):
-        res = self._trend_backfill_result
-        self._trend_backfill_result = None
-        if res is None:
-            return
-        rec, n, last, err = res
-        with self._trend_backfill_lock:
-            if err is not None:
-                self._trend_backfill_state = "echec"
-                self._trend_backfill_msg = f"Relecture du tampon impossible : {err}"
-            elif n == 0:
-                self._trend_backfill_state = "fait"
-                self._trend_backfill_msg = (
-                    "Tampon vide : les statistiques ne portent que sur ce qui arrive "
-                    "maintenant.")
-            else:
-                self.trend.absorb(rec, replace_upto=last)
-                self._trend_backfill_state = "fait"
-                self._trend_backfill_msg = (
-                    f"Tampon relu : {n} trame(s), jusqu'a "
-                    f"{time.strftime('%H:%M:%S', time.localtime(last))}.")
-        self._refresh_stats(force=True)
-
-    # ---------- Rafraichissement ----------
-    def _refresh_stats(self, force=False):
-        """Appele a chaque tick quand la page est visible, et une fois a
-        l'entree. Chaque bloc a sa propre cadence -- voir STATS_*_PERIOD_S."""
-        if not hasattr(self, "stats_state_lbl"):
-            return
-        now = time.time()
-        if force or now - self._stats_last_table >= self.STATS_TABLE_PERIOD_S:
-            self._stats_last_table = now
-            self._refresh_stats_state(now)
-            self._refresh_stats_trends(now)
-            self._refresh_stats_grid(now)
-        if force or now - self._stats_last_hours >= self.STATS_HOURS_PERIOD_S:
-            self._stats_last_hours = now
-            self._refresh_stats_hours(now)
-        if force or now - self._stats_last_curve >= self.STATS_CURVE_PERIOD_S:
-            self._stats_last_curve = now
-            self._refresh_stats_curves(now)
-
-    def _refresh_stats_state(self, now):
-        """Barre d'etat : UNE ligne. Le detail (bornes du tampon, relecture)
-        passe sur la seconde ligne, discrete -- l'essentiel de la page, ce
-        sont les mesures, pas leur inventaire."""
-        covered = self.trend.covered_s(now)
-        parts = [f"Historique : {_fmt_span(covered)}"]
-        last = self.trend.last_t
-        if last is None:
-            parts.append("aucune mesure recue")
-        else:
-            age = now - last
-            if age < 30:
-                parts.append("flux en direct")
-            else:
-                parts.append(f"flux muet depuis {_fmt_span(age)}")
-        parts.append("Lecture seule : rien ici n'entre dans une polaire")
-        self.stats_state_lbl.configure(text="   \u2022   ".join(parts))
-        with self._trend_backfill_lock:
-            state, msg = self._trend_backfill_state, self._trend_backfill_msg
-        self.stats_backfill_btn.configure(
-            state=("disabled" if state == "en cours" else "normal"))
-        self.stats_backfill_lbl.configure(
-            text=msg, fg=(COLOR_PORT if state == "echec" else FG_LABEL_DIM))
-
-    def _refresh_stats_trends(self, now):
-        windows = self._stats_windows()
-        heads = ["Grandeur", "Instantane"] + [_fmt_span(w) for w in windows] + ["Tendance / h"]
-        for lbl, text in zip(self.stats_trend_headers, heads):
-            lbl.configure(text=text)
-        table = self.trend.table(now, windows)
-        fields = self._stats_fields()
-        shown = 0
-        hidden_with_data = 0
-        for key in pe.TREND_KEYS:
-            row_i, name, cells, trend_lbl = self.stats_trend_rows[key]
-            label, unit, dec, kind = pe.TREND_META[key]
-            row = table[key]
-            has = row["instant"] is not None or any(row.get(w) for w in windows)
-            if has and key not in fields:
-                # Recue mais non choisie : comptee pour le petit rappel en
-                # pied de tableau, jamais affichee -- c'est le reglage qui
-                # commande, pas le flux.
-                hidden_with_data += 1
-            if not has or key not in fields:
-                name.grid_remove()
-                for c in cells:
-                    c.grid_remove()
-                trend_lbl.grid_remove()
-                continue
-            shown += 1
-            name.grid(row=row_i, column=0, sticky="w", padx=(0, 8), pady=1)
-            for c, cell in enumerate(cells):
-                cell.grid(row=row_i, column=c + 1, sticky="ew", padx=1, pady=1)
-            trend_lbl.grid(row=row_i, column=6, sticky="ew", padx=1, pady=1)
-
-            # Colonne "Instantane" : la derniere valeur connue, avec son age
-            # quand elle n'est plus fraiche -- une valeur perimee affichee
-            # comme si elle etait actuelle serait un piege.
-            inst = row["instant"]
-            if inst is None:
-                cells[0].set_empty()
-            else:
-                age = now - (row["instant_t"] or now)
-                cells[0].set_value(_fmt_measure(inst, kind, dec),
-                                   "" if age < 15 else f"il y a {_fmt_span(age)}",
-                                   angle=(inst if kind != "linear" else None),
-                                   stale=age >= 15)
-            for i, w in enumerate(windows):
-                st = row.get(w)
-                cell = cells[i + 1]
-                if not st:
-                    cell.set_empty()
-                    continue
-                if kind == "linear":
-                    sub = f"{st['min']:.{dec}f} - {st['max']:.{dec}f}"
-                else:
-                    sub = f"+/-{st['spread_deg']:.0f} deg"
-                cell.set_value(_fmt_measure(st["mean"], kind, dec), sub,
-                               angle=(st["mean"] if kind != "linear" else None))
-            # Tendance : pente de la regression sur la PLUS LONGUE fenetre --
-            # c'est la seule qui contienne assez de recul pour qu'une pente
-            # veuille dire quelque chose.
-            longest = table[key].get(windows[-1])
-            slope = longest.get("slope_per_h") if longest else None
-            if slope is None:
-                trend_lbl.configure(text="—", fg=FG_LABEL_DIM)
-            else:
-                arrow, color = _trend_arrow(key, slope, unit)
-                trend_lbl.configure(text=f"{arrow} {slope:+.{dec}f} {unit}/h", fg=color)
-        if shown:
-            self.stats_trend_empty.configure(
-                fg=FG_LABEL_DIM,
-                text=("" if not hidden_with_data else
-                      f"+ {hidden_with_data} grandeur(s) recue(s) mais non affichee(s) "
-                      "-- a choisir dans Reglages."))
-        elif hidden_with_data:
-            self.stats_trend_empty.configure(
-                fg=COLOR_ACCENT,
-                text="Des mesures arrivent, mais aucune des grandeurs choisies n'en fait "
-                     "partie : ouvrez Reglages... pour ajuster la selection.")
-        else:
-            self.stats_trend_empty.configure(
-                fg=COLOR_ACCENT,
-                text="Aucune mesure pour l'instant. Verifiez que les voies UDP recoivent "
-                     "quelque chose (icone chronometre), puis relisez le tampon ci-dessus.")
-
-    def _refresh_stats_hours(self, now):
-        count = int(self.config_data.get("stats_hours_shown", 12))
-        rows = self.trend.hourly_distances(now, count)
-        # Les heures vides EN TETE (avant la premiere mesure connue) sont
-        # elaguees : une rangee de douze cartes "sans flux" avant trois
-        # heures mesurees n'apprend rien et noie ce qui compte. Les trous
-        # AU MILIEU, eux, restent visibles -- un trou entre deux heures
-        # mesurees est une information.
-        while len(rows) > 6 and rows[0][1] is None:
-            rows.pop(0)
-        for w in self._stats_hour_cards:
-            w.destroy()
-        self._stats_hour_cards = []
-        total = 0.0
-        counted = 0
-        for h0, nm, cov in rows:
-            card = tk.Frame(self.stats_hours_frame, bg=BG_PANEL, relief="solid", bd=1,
-                             padx=6, pady=3)
-            card.pack(side="left", padx=(0, 4), pady=2)
-            tk.Label(card, text=time.strftime("%Hh", time.localtime(h0)), bg=BG_PANEL,
-                     fg=FG_LABEL_DIM, font=("Segoe UI", 8)).pack()
-            if nm is None:
-                tk.Label(card, text="--", bg=BG_PANEL, fg=FG_LABEL_DIM,
-                         font=("Consolas", 11, "bold")).pack()
-                tk.Label(card, text="sans flux", bg=BG_PANEL, fg=FG_LABEL_DIM,
-                         font=("Segoe UI", 7)).pack()
-            else:
-                total += nm
-                counted += 1
-                partial = cov < 0.9
-                tk.Label(card, text=f"{nm:.1f}", bg=BG_PANEL,
-                         fg=(COLOR_ACCENT if partial else FG_DIGIT),
-                         font=("Consolas", 11, "bold")).pack()
-                tk.Label(card, text=("M" if not partial else f"M / {cov * 100:.0f} %"),
-                         bg=BG_PANEL, fg=FG_LABEL_DIM, font=("Segoe UI", 7)).pack()
-            self._stats_hour_cards.append(card)
-        if counted:
-            self.stats_hours_total_lbl.configure(
-                text=f"Total sur les {counted} heure(s) mesuree(s) : {total:.1f} milles "
-                     f"(soit {total / counted:.1f} M/h en moyenne).")
-        else:
-            self.stats_hours_total_lbl.configure(
-                text="Aucune vitesse fond recue : la distance ne peut pas etre calculee.")
-
-    def _stats_grid_cols(self):
-        """Nombre de colonnes REELLEMENT affichables : le reglage, borne par
-        ce qui tient dans la largeur disponible. Un tableau plus large que la
-        fenetre serait tronque sans le dire."""
-        want = int(self.config_data.get("stats_grid_cols", 12))
-        width = self._stats_inner.winfo_width()
-        if width <= 1:
-            return want
-        room = (width - self.STATS_GRID_LABEL_PX - 40) // self.STATS_GRID_MIN_COL_PX
-        return max(4, min(want, int(room) if room > 0 else 4))
-
-    def _stats_grid_rows(self):
-        """Lignes du tableau par tranches, deduites des grandeurs choisies :
-        suivre le vent reel amene ses rafales et sa direction (c'est la meme
-        histoire), la vitesse fond et la pression ne viennent que si on les
-        a demandees. Selection vide de tout cela : on retombe sur le tableau
-        complet plutot que d'afficher un cadre vide."""
-        fields = self._stats_fields()
-        rows = []
-        if "tws" in fields:
-            rows += ["tws", "wind_gust_kn", "wind_dir_deg"]
-        elif "aws" in fields:
-            rows.append("aws")
-        if "sog" in fields:
-            rows.append("sog")
-        if "pressure" in fields:
-            rows.append("pressure")
-        return rows or ["tws", "wind_gust_kn", "wind_dir_deg", "sog", "pressure"]
-
-    def _refresh_stats_grid(self, now):
-        if not self.config_data.get("stats_show_grid", True):
-            return
-        cols = self._stats_grid_cols()
-        rows = self._stats_grid_rows()
-        step_s = self.config_data.get("stats_grid_step_min", 30) * 60.0
-        if self._stats_grid_shape != (cols, tuple(rows)):
-            self._rebuild_stats_grid(cols, rows)
-        want = int(self.config_data.get("stats_grid_cols", 12))
-        self.stats_grid_note_lbl.configure(
-            text="" if cols >= want else
-            f"{cols} colonnes affichees : la fenetre est trop etroite pour {want}.")
-
-        data = {k: self.trend.buckets(k, now, step_s, cols) for k in rows}
-        ref = data[rows[0]]
-        for c in range(cols):
-            t0 = ref[c]["t0"] if c < len(ref) else now
-            lt = time.localtime(t0)
-            # L'heure ronde porte le jour : sur 24 colonnes de 60 minutes on
-            # traverse minuit, et douze colonnes "00:00 01:00..." sans date
-            # ne diraient pas de quel jour il s'agit.
-            txt = time.strftime("%H:%M", lt)
-            if lt.tm_hour == 0 and lt.tm_min < step_s / 60.0:
-                txt = time.strftime("%d/%m", lt)
-            self._stats_grid_headers[c].configure(text=txt)
-        for key in rows:
-            _label, unit, dec, kind = pe.TREND_META[key]
-            cells = data[key]
-            for c in range(cols):
-                widget = self._stats_grid_cells[(key, c)]
-                cell = cells[c] if c < len(cells) else None
-                if cell is None or cell["mean"] is None:
-                    widget.set_empty()
-                    continue
-                bg, fg = (_wind_cell_colors(cell["mean"])
-                          if key in ("tws", "wind_gust_kn", "aws") else (BG_PANEL, FG_LABEL))
-                widget.set_value(_fmt_measure(cell["mean"], kind, dec), "",
-                                 angle=(cell["mean"] if kind != "linear" else None),
-                                 bg=bg, fg=fg)
-
-    def _rebuild_stats_grid(self, cols, rows):
-        for child in self.stats_grid_frame.winfo_children():
-            child.destroy()
-        self._stats_grid_cells = {}
-        self._stats_grid_headers = []
-        grid = self.stats_grid_frame
-        for c in range(cols + 1):
-            grid.columnconfigure(c, weight=0 if c == 0 else 1,
-                                 uniform="" if c == 0 else "statsgrid")
-        tk.Label(grid, text="", bg=BG_APP).grid(row=0, column=0)
-        for c in range(cols):
-            lbl = tk.Label(grid, text="", bg=BG_APP, fg=FG_LABEL_DIM,
-                            font=("Segoe UI", 7, "bold"))
-            lbl.grid(row=0, column=c + 1, sticky="ew", padx=1)
-            self._stats_grid_headers.append(lbl)
-        for r, key in enumerate(rows):
-            label, unit, dec, kind = pe.TREND_META[key]
-            tk.Label(grid, text=f"{label} ({unit})", bg=BG_APP, fg=FG_LABEL,
-                     font=FONT_LABEL, anchor="w").grid(row=r + 1, column=0, sticky="w",
-                                                        padx=(0, 8))
-            for c in range(cols):
-                cell = StatCell(grid, arrow=(kind != "linear"), compact=True,
-                                 toward=(key in _TREND_ANGLE_TOWARD))
-                cell.grid(row=r + 1, column=c + 1, sticky="ew", padx=1, pady=1)
-                self._stats_grid_cells[(key, c)] = cell
-        self._stats_grid_shape = (cols, tuple(rows))
-
-    @staticmethod
-    def _stats_time_ticks(start, end):
-        """Graduations de temps regulieres et RONDES (des multiples entiers
-        de 5, 10, 30 minutes... selon l'etendue), entre 4 et 9 sur l'axe.
-        Matplotlib saurait en poser, mais pas alignees sur l'horloge du
-        bord -- or "15:00, 15:30, 16:00" se lit, "15:07, 15:37" se dechiffre."""
-        span = max(1.0, end - start)
-        for step in (60, 120, 300, 600, 900, 1800, 3600, 7200, 10800,
-                     21600, 43200, 86400):
-            if span / step <= 9:
-                break
-        first = math.ceil(start / step) * step
-        return [t for t in range(int(first), int(end) + 1, int(step))], step
-
-    def _refresh_stats_curves(self, now):
-        """Les deux graphes, redessines ensemble sur la MEME fenetre de
-        temps (self._stats_view). Vent en haut, pression en bas : chacun sa
-        propre echelle -- superposes sur un meme axe, l'un ecrasait l'autre
-        et les dixiemes d'hectopascal faisaient un escalier illisible."""
-        axw, axp = self.stats_ax_wind, self.stats_ax_press
-        axw.clear()
-        axp.clear()
-        self.stats_fig.set_facecolor(BG_APP)
-
-        view = self._stats_view
-        span_s, end = self._stats_clamp_view(view["span_s"], view["end"], now)
-        self._stats_view = {"span_s": span_s, "end": end}
-        t_end = now if end is None else end
-        t_start = t_end - span_s
-
-        # Moyennes PAR TRANCHE et non mesures brutes : un anemometre qui
-        # parle toutes les deux secondes dessine une pelote ou la tendance
-        # disparait. La dispersion reste visible : bande claire mini/maxi.
-        step = max(30.0, span_s / 150)
-        count = max(2, int(math.ceil(span_s / step)) + 1)
-        tws = self.trend.buckets("tws", t_end, step, count)
-        gust = self.trend.buckets("wind_gust_kn", t_end, step, count)
-        press = self.trend.buckets("pressure", t_end, step, count)
-
-        def xs(cells):
-            return [(c["t0"] + c["t1"]) / 2.0 for c in cells]
-
-        def filled(cells):
-            return [c for c in cells if c["mean"] is not None]
-
-        # ----- Vent (graphe du haut) -----
-        wind_top = 10.0
-        cells = filled(tws)
-        if cells:
-            axw.fill_between(xs(cells), [c["min"] for c in cells],
-                             [c["max"] for c in cells],
-                             color=COLOR_ACCENT, alpha=0.18, linewidth=0)
-            axw.plot(xs(cells), [c["mean"] for c in cells], color=COLOR_ACCENT,
-                     lw=1.6, label="Vent reel")
-            wind_top = max(wind_top, max(c["max"] for c in cells))
-        gcells = filled(gust)
-        if gcells:
-            axw.plot(xs(gcells), [c["max"] for c in gcells], color=COLOR_PORT,
-                     lw=1.0, alpha=0.85, label="Rafales")
-            wind_top = max(wind_top, max(c["max"] for c in gcells))
-        # L'echelle du vent PART DE ZERO, toujours : c'est le zero qui donne
-        # la proportion -- un 12 noeuds trace entre 10 et 14 semble double
-        # d'un 11, alors qu'il n'en differe que de 9 %.
-        axw.set_ylim(0.0, wind_top * 1.15)
-        axw.yaxis.set_major_locator(MaxNLocator(nbins=6, integer=True))
-        axw.set_ylabel("vent (kn)", color=FG_LABEL, fontsize=8)
-        if cells or gcells:
-            leg = axw.legend(loc="upper left", fontsize=7, framealpha=0.85)
-            leg.get_frame().set_facecolor(BG_PANEL)
-            leg.get_frame().set_edgecolor(COLOR_BORDER)
-            for text in leg.get_texts():
-                text.set_color(FG_LABEL)
-        else:
-            axw.text(0.5, 0.5, "aucun vent recu sur cette etendue",
-                     transform=axw.transAxes, ha="center", va="center",
-                     color=FG_LABEL_DIM, fontsize=9)
-
-        # ----- Pression (graphe du bas) -----
-        pcells = filled(press)
-        if pcells:
-            axp.plot(xs(pcells), [c["mean"] for c in pcells], color=FG_DIGIT,
-                     lw=1.7)
-            lo = min(c["min"] for c in pcells)
-            hi = max(c["max"] for c in pcells)
-            # Echelle en HECTOPASCALS ENTIERS, jamais plus fine : au-dela,
-            # le bruit du capteur dessine un escalier qu'on prend pour un
-            # front. 4 hPa d'amplitude minimum -- une variation qui tient
-            # la-dedans est, a l'echelle d'un barometre, un trait plat, et
-            # doit se VOIR plate.
-            center = (lo + hi) / 2.0
-            half = max(2.0, (hi - lo) * 0.65)
-            axp.set_ylim(center - half, center + half)
-            axp.yaxis.set_major_locator(MaxNLocator(nbins=5, integer=True,
-                                                    steps=[1, 2, 5]))
-        else:
-            axp.text(0.5, 0.5, "aucune pression recue sur cette etendue",
-                     transform=axp.transAxes, ha="center", va="center",
-                     color=FG_LABEL_DIM, fontsize=9)
-        axp.set_ylabel("pression (hPa)", color=FG_LABEL, fontsize=8)
-
-        # ----- Axe de temps COMMUN -----
-        axw.set_xlim(t_start, t_end)
-        ticks, tick_step = self._stats_time_ticks(t_start, t_end)
-        day_span = t_end - t_start > 20 * 3600 or (
-            ticks and time.localtime(ticks[0]).tm_mday != time.localtime(t_end).tm_mday)
-
-        def _tick_label(t):
-            lt = time.localtime(t)
-            if day_span and lt.tm_hour == 0 and lt.tm_min == 0:
-                return time.strftime("%d/%m", lt)
-            return time.strftime("%H:%M", lt)
-
-        axp.set_xticks(ticks)
-        axp.set_xticklabels([_tick_label(t) for t in ticks])
-        # Les etiquettes de temps ne vivent que sur le graphe du BAS : les
-        # deux partagent le meme axe, les repeter en haut ne ferait que
-        # manger la place du vent.
-        axw.tick_params(labelbottom=False)
-
-        for a in (axw, axp):
-            a.set_facecolor(BG_PANEL)
-            a.tick_params(colors=FG_LABEL, labelsize=7)
-            for spine in a.spines.values():
-                spine.set_color(COLOR_BORDER)
-            a.grid(True, color=COLOR_BORDER, lw=0.4, alpha=0.6)
-
-        # Vue figee (panoramique dans le passe) : le dire, et dire comment
-        # revenir -- un graphe qui ne bouge plus sans explication ressemble
-        # a une panne.
-        if end is not None:
-            self.stats_curve_note_lbl.configure(
-                text="Vue figee sur le passe -- cliquez une etendue pour revenir au direct.")
-        else:
-            self.stats_curve_note_lbl.configure(text="")
-
-        self.stats_canvas.draw_idle()
-
-    # =====================================================================
     # Boucle de rafraichissement
     # =====================================================================
     def report_callback_exception(self, exc_type, exc_value, exc_tb):
@@ -8972,12 +7598,6 @@ class App(tk.Tk):
             last_smoothed = self.engine.last_smoothed
         self._refresh_acq_bar()
         self._update_instruments()
-        # Statistiques : uniquement quand la page est sous les yeux. Les
-        # mesures, elles, continuent d'etre enregistrees en permanence
-        # (PolarEngine.trend) -- ce sont les tableaux qui coutent, pas la
-        # collecte.
-        if self._current_step == "statistiques":
-            self._refresh_stats()
 
         # Theme automatique : controle une fois par minute environ (le tick
         # tourne a 400 ms), suffisant pour un phenomene aussi lent qu'un
@@ -9111,14 +7731,13 @@ class App(tk.Tk):
             if choice:
                 self._process_session()
 
-        for attr in ("_refresh_tick_id", "_trend_backfill_after_id"):
-            ident = getattr(self, attr, None)
-            if ident is not None:
-                try:
-                    self.after_cancel(ident)
-                except tk.TclError:
-                    pass
-                setattr(self, attr, None)
+        ident = getattr(self, "_refresh_tick_id", None)
+        if ident is not None:
+            try:
+                self.after_cancel(ident)
+            except tk.TclError:
+                pass
+            self._refresh_tick_id = None
         if self.recording_active:
             self._stop_recording()
         self._close_udp_listeners()

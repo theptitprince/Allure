@@ -13,7 +13,7 @@ bateau *fait vraiment* : Allure écoute les trames, enregistre des passes
 annotées par voilure, les accumule sortie après sortie dans un entrepôt, et
 en tire des polaires par configuration, une polaire max pour le routage
 (`.pol`, `.csv`, TimeZero) et un guide de voilure. Version actuelle :
-2.0b — l'historique des livraisons est dans [CHANGELOG.md](CHANGELOG.md).
+2.1a — l'historique des livraisons est dans [CHANGELOG.md](CHANGELOG.md).
 
 Python 3.8+, tkinter et matplotlib — Windows en priorité.
 
@@ -44,6 +44,21 @@ python -m tkinter
 La première commande doit afficher un numéro de version, la seconde doit
 ouvrir une petite fenêtre de test — fermez-la.
 
+### Le plus simple : `installer_dependances.bat`
+
+Python installé, double-cliquez sur **`installer_dependances.bat`**, dans le
+dossier d'Allure (voir section 2). Il installe pour la commande `python`
+— celle qu'utilise ce README pour lancer Allure — et affiche le chemin de
+cet interprète ; il vérifie tkinter, installe **matplotlib** (indispensable)
+puis **pystray** et **pillow** (facultatifs, voir plus bas), et termine par
+un bilan. S'il échoue, il dit pourquoi — et la section *Installation hors
+ligne* ci-dessous prend le relais.
+
+Votre raccourci de lancement vise un autre Python (section 3) ? Installez
+alors pour celui-là : `"C:\Chemin\vers\python.exe" -m pip install matplotlib`.
+
+Les commandes qui suivent font la même chose à la main.
+
 ### La seule bibliothèque à installer
 
 ```powershell
@@ -73,6 +88,57 @@ python -m pip install pystray pillow
 Sans ces deux bibliothèques, la croix ferme normalement — rien d'autre ne
 change. L'option se règle dans Paramètres → *Affichage & fenêtre*.
 
+### Installation hors ligne
+
+Quand `pip` ne peut pas joindre internet — pas de réseau à bord, proxy, ou
+pare-feu et antivirus qui interdisent le réseau à `python.exe` (l'erreur
+`WinError 10013` en est la signature) —, on télécharge les paquets ailleurs
+et on les installe depuis un dossier.
+
+**La méthode sûre.** Sur un PC **Windows 64 bits** connecté à internet,
+avec **la même version de Python** (même `3.XY` : `python --version` sur les
+deux ; pour les bits, `python -c "import platform; print(platform.architecture()[0])"`
+ou le bilan de `installer_dependances.bat`) :
+
+```powershell
+python -m pip download matplotlib pystray pillow -d C:\allure_paquets
+```
+
+Copiez le dossier `C:\allure_paquets` sur le PC du bord (clé USB), puis :
+
+```powershell
+python -m pip install --no-index --find-links C:\allure_paquets matplotlib pystray pillow
+```
+
+`--no-index` interdit à pip d'aller sur internet : tout vient du dossier.
+`pip download` a l'avantage de ramener **toutes** les dépendances d'un coup.
+
+**À la main, fichier par fichier.** Télécharger le seul fichier de
+matplotlib ne suffit pas : il dépend de numpy, contourpy, cycler, fonttools,
+kiwisolver, packaging, pillow, pyparsing, python-dateutil et six
+(`python -m pip list` montre ceux que vous avez déjà). Pour chacun, sur la
+page `https://pypi.org/project/<nom>/#files`, prenez le fichier `.whl` :
+
+- dont le nom contient `cp3XY`, où `3.XY` est votre version de Python
+  (`cp314` pour Python 3.14), **et** `win_amd64` (Windows 64 bits) — jamais
+  `cp314t` (une variante de Python « free-threaded »), ni `win32`, ni
+  `win_arm64` ;
+- ou, pour les paquets écrits en Python pur (cycler, packaging, pyparsing,
+  python-dateutil, six), le fichier qui se termine par `py3-none-any.whl`
+  ou `py2.py3-none-any.whl`.
+
+Ajoutez **pystray** (Python pur lui aussi) si vous voulez la zone de
+notification — sinon, retirez `pystray pillow` de la commande. Rangez tous
+les fichiers dans un même dossier, et lancez la commande
+`pip install --no-index --find-links` ci-dessus : s'il en manque un, pip le
+nomme, et n'installe rien tant qu'il manque.
+
+La même méthode vaut pour PyInstaller, si vous construisez `Allure.exe`
+(section 3) : `python -m pip download pyinstaller -d C:\allure_paquets` sur
+le PC connecté, puis
+`python -m pip install --no-index --find-links C:\allure_paquets pyinstaller`
+sur le PC du bord.
+
 ---
 
 ## 2. Les fichiers à mettre sur votre ordinateur
@@ -98,6 +164,10 @@ Le programme tient en **quatre fichiers, qui doivent rester ensemble** :
 
 Les quatre fichiers sont indispensables. Il n'y a **pas** de lanceur à
 part : `allure.py` se lance directement.
+
+À côté, deux utilitaires qui ne font pas partie du programme lui-même :
+`installer_dependances.bat` (section 1) et `construire_exe.bat`
+(section 3).
 
 Le fichier `LICENSE` contient le texte de la licence du programme (voir
 « Licence » en fin de document).
@@ -156,6 +226,32 @@ deux fois et demie par seconde — elle est consignée **une seule fois**,
 sans boîte, sinon vous seriez noyé sous les dialogues ; et la boucle
 survit, car c'est elle qui tient le tampon et l'acquisition.
 
+### Un exécutable autonome : `Allure.exe`
+
+Pour un PC où l'on ne veut pas installer Python, double-cliquez sur
+**`construire_exe.bat`** sur un poste où Allure tourne déjà (matplotlib
+installé — voir section 1). Il installe PyInstaller s'il manque, dessine
+l'icône d'Allure — un disque bleu portant une voile blanche, le même logo
+que la zone de notification et la barre de titre — et fabrique
+**`Allure.exe`**, posé **à côté de `allure.py`**.
+
+Un exécutable range ses dossiers (`donnees/`, `reglages/`…) à côté de
+**lui-même** : posé là, `Allure.exe` partage donc l'entrepôt et les
+réglages de `allure.py`. Copié seul sur un autre poste, il y crée les
+siens — réimportez alors votre sauvegarde (roue dentée → *Sauvegardes*).
+Un seul fichier, rien d'autre à installer ; son démarrage est un peu plus
+lent que celui du script, car il se décompresse à chaque lancement.
+
+Ce que l'exe contient, c'est ce qui est installé sur le poste de
+**construction** : la zone de notification n'y est que si pystray et
+pillow y sont installés (section 1, *Facultatif*) — le script le signale.
+Installer pystray après coup sur le poste qui *reçoit* l'exe n'y change
+rien : il faut reconstruire.
+
+Comme pour `pythonw.exe` plus haut : `Allure.exe` est un exécutable
+nouveau pour le pare-feu — autorisez-le en réseau **privé** au premier
+lancement, sinon les voies UDP ne recevront rien.
+
 ---
 
 ## 4. Ce que le programme crée à côté de lui
@@ -183,7 +279,7 @@ et vos passes, à ranger où vous voulez. Vos réglages s'exportent séparément
 au même endroit.
 
 **Changement d'ordinateur ou de version.** Recopiez les quatre fichiers du
-programme, puis réimportez votre sauvegarde et vos réglages. Une version
+programme (ou le seul `Allure.exe`), puis réimportez votre sauvegarde et vos réglages. Une version
 récente relit toujours les données de n'importe quelle version antérieure —
 c'est un engagement du programme.
 
@@ -221,69 +317,16 @@ Trois étapes numérotées — le parcours normal des données :
    plus — ce n'est pas un mode dans lequel l'application bascule), la
    correction a posteriori de l'annotation d'une passe, le **recalcul d'une
    passe depuis le tampon**, et la corbeille.
-3. **Polaires** — tracé automatique dès l'arrivée sur l'étape, export
-   `.pol` (Expedition) ou `.csv`, et le bouton **Polaire max (routage)…**
-   (voir ci-dessous).
+3. **Polaires** — la **polaire max** : pour chaque case cap/vent, la
+   meilleure vitesse parmi les configurations cochées ; une seule cochée,
+   c'est sa polaire à elle. Tracé automatique dès l'arrivée sur l'étape,
+   guide de voilure, exports `.pol` (Expedition), `.csv` et TimeZero (voir
+   ci-dessous).
 
-Et, en haut à droite, **trois boutons** qui ne sont pas des étapes du
-parcours : **⏱** (les mesures en direct), **📈** (les statistiques) et
-**⚙** (les paramètres).
+Et, en haut à droite, **deux boutons** qui ne sont pas des étapes du
+parcours : **⏱** (les mesures en direct) et **⚙** (les paramètres).
 
-### Les statistiques (bouton 📈)
-
-Une page de **lecture**, qui ne produit aucune polaire et n'enregistre rien.
-Elle répond à des questions que le reste de l'application ne pose jamais :
-*le vent forcit-il ? la pression baisse-t-elle ? ai-je fait plus de route
-cette heure-ci que la précédente ?*
-
-Elle fonctionne **sans acquisition** : elle lit le **tampon glissant**, qui
-tourne en permanence, et le flux en direct. À l'ouverture de l'application,
-le tampon est relu en tâche de fond (bouton *Relire le tampon* pour
-recommencer) — sans quoi une « moyenne sur 60 minutes » consultée cinq
-minutes après le lancement ne porterait que sur cinq minutes.
-
-Ce que la page **montre** se choisit dans la roue dentée → **Statistiques**
-(bouton *Réglages…* en haut de la page pour y aller directement) : les
-grandeurs affichées (par défaut l'essentiel — vents réel et apparent, leurs
-angles, vitesses surface et fond, pression ; le reste du catalogue se coche
-à la demande), les quatre durées de moyenne, la profondeur d'historique, le
-tableau par tranches et son pas. La page elle-même ne porte qu'un seul
-réglage, celui qu'on tourne l'œil sur le résultat : **l'échelle de temps
-des graphes**.
-
-Quatre blocs :
-
-- **Tendances** — la même grandeur sur quatre durées (5 / 10 / 30 / 60 min
-  par défaut), plus l'instantané et la pente horaire. C'est l'**écart entre
-  les colonnes** qui informe : 18 nœuds sur 5 minutes et 14 sur 60, c'est un
-  vent qui forcit. Les angles s'affichent **en flèches**. Une case vide =
-  aucune mesure sur cette durée, jamais une vieille valeur recopiée ; une
-  grandeur reçue mais non cochée est simplement comptée en pied de tableau.
-- **Vent et pression** — deux graphes **séparés**, chacun sa propre échelle,
-  mais **un seul axe de temps commun** : zoomer (molette) ou remonter dans
-  le passé (cliquer-glisser) déplace les deux à l'identique, et les boutons
-  d'étendue (1 h à 24 h) ramènent au direct. L'échelle du vent **part de
-  zéro** — c'est le zéro qui donne la proportion — et la pression se gradue
-  en **hectopascals entiers**, sur 4 hPa d'amplitude minimum : une variation
-  qui tient là-dedans est, à l'échelle d'un baromètre, un trait plat, et
-  doit se voir plate. Le vent est tracé en moyenne par tranche avec sa bande
-  mini/maxi — les mesures brutes dessinent une pelote où la tendance
-  disparaît.
-- **Distance sur le fond, heure par heure** — chaque **heure pleine** du
-  bord, par intégration de la vitesse fond. Une heure au flux interrompu
-  affiche sa couverture (« 5,4 M / 35 % ») ; une coupure n'est jamais
-  comblée ; les heures vides d'avant la première mesure sont élaguées.
-- **Tableau des dernières heures** *(désactivable)* — une table de prévision
-  tournée vers le passé, colorée par la force du vent. Ses lignes suivent
-  les grandeurs cochées : suivre le vent réel amène ses rafales et sa
-  direction.
-
-**D'où viennent les mesures ?** Des **mêmes valeurs arbitrées** que les
-cadrans du suivi en direct : la source de chaque grandeur (quelle voie,
-quels replis) se choisit dans *Sources & tampon* et s'applique ici à
-l'identique — les statistiques ne peuvent pas raconter une autre histoire
-que le suivi en direct. Une valeur physiquement invraisemblable (trame
-tronquée) est écartée en silence plutôt que de ruiner une moyenne horaire.
+### Fonctionnalités en détail
 
 **L'indice de confiance.** Une polaire ne dit pas seulement une vitesse :
 elle dit aussi, en creux, *crois-moi*. Or toutes les cases ne méritent pas
@@ -312,8 +355,9 @@ répétition dans le temps la donne.
 L'indice se lit à trois niveaux :
 
 - **par case**, sur l'étape Polaires : la **taille des points** du tracé
-  suit la confiance et non le simple effectif, et les exports
-  `.csv` portent les colonnes *confiance, niveau, moments indépendants,
+  suit la confiance (celle de la configuration gagnante de la case) et non
+  le simple effectif, et l'export *une polaire par configuration*
+  (`.csv`) porte les colonnes *confiance, niveau, moments indépendants,
   sorties, dispersion* ;
 - **par passe**, colonne *Confiance* de l'Entrepôt : une passe se juge sur
   ce qu'elle a **rapporté** — combien de cases différentes elle a nourries,
@@ -321,7 +365,8 @@ L'indice se lit à trois niveaux :
   pas pénalisée (c'est un bon enregistrement), mais deux heures passées dans
   le même bord, si : elles n'apprennent qu'une seule chose. Sélectionnez une
   passe et la ligne du dessous dit **pourquoi** ;
-- **par configuration**, sous le tracé : la *maturité* de cette polaire, le
+- **par configuration**, en tête de l'étape Polaires quand une seule
+  configuration est cochée : la *maturité* de cette polaire, le
   nombre de cases solides, et surtout **ce qui n'a jamais été mesuré** (« le
   portant, le vent fort ») — c'est-à-dire où aller chercher des données.
 
@@ -347,8 +392,8 @@ passes bascule les trente d'un coup, avec le compte des passes incluses à
 côté. Trier case par case serait un travail de copiste, et l'on veut souvent
 repartir de zéro pour n'en garder que quelques-unes.
 
-**Écrêtage par la dérivée** (dans la page Polaire max, désactivé par
-défaut). Une polaire est une courbe **physiquement lisse** : la vitesse d'un
+**Écrêtage par la dérivée** (étape Polaires, colonne de gauche, désactivé
+par défaut). Une polaire est une courbe **physiquement lisse** : la vitesse d'un
 bateau ne peut pas grimper de trois nœuds entre 60° et 65°. Une case qui le
 prétend ne décrit pas le bateau — elle décrit un surf sur une vague, une
 risée ou une poussée de courant, un instant que le routage prendrait pour un
@@ -391,15 +436,25 @@ photo qu'on agrandit. Le zoom **survit à un retracé** : cocher une
 configuration ne vous rejette pas à la vue de départ. Et l'on ne peut pas
 perdre le dessin hors de l'écran — le déplacement est borné.
 
+**Masquer un vent.** Une polaire à quinze courbes se lit mieux à cinq :
+cliquez une valeur dans la légende des vents, à droite du cercle, et sa
+courbe disparaît ; recliquez, elle revient. L'échelle, elle, ne bouge pas —
+les autres courbes restent à leur place, la comparaison garde un sens.
+
 **Le détail au survol.** Sur le tracé de la polaire max, passer la souris
-sur un point affiche sa fiche : cap et vent de la case, vitesse, origine
-(mesurée, interpolée, ou pointe écrêtée), voilure gagnante, nombre de
-mesures et confiance. Une polaire porte des centaines de cases ; aller
+sur un point affiche une infobulle : cap et vent de la case, vitesse,
+origine (mesurée, interpolée, ou pointe écrêtée), voilure gagnante, nombre
+de mesures et confiance. Une polaire porte des centaines de cases ; aller
 chercher chacune dans un tableau casse le fil de la lecture. Loin de tout
 point, l'infobulle s'efface plutôt que de désigner une case au hasard.
 
+**La fiche d'un point.** Un **clic** sur un point du tracé — ou sur une
+case du guide de voilure — ouvre sa fiche complète : la valeur retenue et
+d'où elle vient, ses mesures, sa confiance, les passes qui l'ont nourrie,
+et les configurations qu'elle a battues.
+
 **Export TimeZero (MaxSea / Nobeltec TZ).** Le bouton *Exporter TimeZero*
-de la page Polaire max écrit **deux fichiers XML d'un seul geste** :
+de l'étape Polaires écrit **deux fichiers XML d'un seul geste** :
 
 - `..._Wind_Polar.xml` — la polaire de vitesse ;
 - `..._Sail_Set.xml` — la **voilure à porter**, par plage de cap et de vent.
@@ -480,23 +535,36 @@ regarder.
 répondent à *« que vaut le bateau sous cette voilure ? »* ; un logiciel de
 routage (qtVlm, Adrena, OpenCPN…), lui, veut **une seule table pleine** :
 *« que vaut le bateau, point »* — à charge pour l'équipage de porter la
-bonne toile. Le bouton **Polaire max (routage)…** de l'étape Polaires ouvre
-une page dédiée qui la construit : pour chaque case cap/vent, la
-**meilleure vitesse** parmi les configurations cochées l'emporte — et la
-page retient **laquelle** a gagné, ce qui donne en prime le **guide de
-voilure** (« pour ce cap et ce vent, portez ça »), consultable case par
-case ou via le petit chercheur *Quelle voilure ?*. La page est bâtie pour
-**tenir dans la fenêtre** : les exports occupent un pied de page sur toute
-la largeur, les options et la recherche sont ancrées au bas de la colonne
-de gauche — Tk sert les bords avant le centre, rien ne peut donc être
-repoussé hors du cadre. Seule la liste des configurations, dont la hauteur
-dépend de votre bateau, se donne une barre de défilement, et seulement
-au-delà d'une dizaine d'entrées. Sur ce bateau — un
+bonne toile. L'étape **Polaires** la construit directement : pour chaque
+case cap/vent, la **meilleure vitesse** parmi les configurations cochées
+l'emporte — et la page retient **laquelle** a gagné, ce qui donne en prime
+le **guide de voilure** (« pour ce cap et ce vent, portez ça »),
+consultable case par case (bouton *Guide de voilure*) ou via le petit
+chercheur *Quelle voilure ?*. **Une seule configuration cochée** — un
+double-clic sur elle dans la liste suffit — et c'est **sa** polaire : la
+vue par configuration n'est qu'un cas particulier de la polaire max, elle
+n'a plus d'écran à part.
+
+**Lisible d'abord.** Le tracé dispose de toute la hauteur de la page, que
+le bateau ait deux configurations ou vingt : rien dont la taille dépend de
+leur nombre ne s'empile au-dessus ou au-dessous de lui. Leur liste vit dans
+la colonne de gauche, avec sa propre barre de défilement et les boutons
+*Tout cocher* / *Tout décocher* ; chacune y porte un **code** (C1, C2…) qui
+ne bouge pas quand on coche ou décoche — décocher C2 ne renomme pas C3 — et
+que reprennent le guide, l'infobulle et la fiche d'un point. C'est le rang
+de la configuration dans l'entrepôt, la plus fournie d'abord : il peut
+donc changer quand une passe est ajoutée, incluse ou exclue. La légende des
+vents se tient
+à droite du cercle, et le guide de voilure s'affiche **à la place** du
+tracé, pas dessous. Les exports occupent un pied de page sur toute la
+largeur, les options et la recherche sont ancrées au bas de la colonne de
+gauche — Tk sert les bords avant le centre, rien ne peut donc être repoussé
+hors du cadre. Sur ce bateau — un
 cargo à voile **et** moteur — **le moteur fait partie de la voilure** :
 chaque cas de vent appelle un *jeu* voiles/moteur, pas une voile seule.
 Les configurations moteur concourent donc **par défaut**, et le guide de
 voilure dit aussi *quand passer au moteur*. Pour une polaire voile pure,
-décochez-les dans la page — ou changez le défaut dans la roue dentée →
+décochez-les dans la liste — ou changez le défaut dans la roue dentée →
 *Lissage & table* (option « Le moteur fait partie de la voilure »). Les
 **trous** de la grille sont
 bouchés par **interpolation linéaire le long du TWA** (jamais au-delà de la
@@ -507,7 +575,9 @@ interpolés. L'export **`.pol` est une grille pleine** : les cases jamais
 observées y valent 0, ce qu'un routeur lit comme « zone où le bateau ne
 marche pas » (le vent debout, typiquement). L'export **`.csv`** donne pour
 chaque case la vitesse, son origine (mesurée / interpolée) et la voilure
-gagnante.
+gagnante ; l'export *une polaire par configuration*, à droite du pied de
+page, donne pour le tableur la table de chaque configuration, avec son
+indice de confiance.
 
 Un **bandeau d'acquisition** court en haut de toutes les pages : l'état de
 la prise, son chrono, la voilure enregistrée, et le bouton démarrer/arrêter.
@@ -673,9 +743,14 @@ l'automatique reste en clair.
 Relancez l'installateur, choisissez *Modify*, et cochez `tcl/tk and IDLE`.
 
 **« No module named matplotlib »** — la commande d'installation n'a pas été
-exécutée, ou l'a été pour un autre Python. Réessayez avec
-`python -m pip install matplotlib` (la forme `python -m pip` garantit qu'on
-installe bien pour le Python qui lancera le programme).
+exécutée, ou l'a été pour un autre Python. Le plus simple : double-clic sur
+`installer_dependances.bat`, qui installe pour la commande `python` et
+affiche le chemin de l'interprète concerné. À la main :
+`python -m pip install matplotlib` — ou, si votre raccourci lance un autre
+Python, `"C:\Chemin\vers\python.exe" -m pip install matplotlib` : la forme
+`-m pip` garantit qu'on installe pour CE Python-là. Pas d'internet, ou
+`WinError 10013`
+dans le message : voir *Installation hors ligne* (section 1).
 
 **Aucune trame ne rentre en mode direct** — vérifiez dans *Paramètres* que
 les voies UDP actives ont les bons numéros de port, et que le pare-feu
@@ -713,10 +788,7 @@ l'horloge **recule** :
   c'est-à-dire à la perte ;
 - le **tampon glissant** ne purge jamais au-delà de ce que les données
   racontent : même une horloge avancée par erreur de dix jours ne peut pas
-  lui faire supprimer les dernières 48 h de flux enregistré ;
-- les **tendances** (page 📈) jettent les mesures horodatées « dans le
-  futur » plutôt que de les mélanger aux fenêtres — on perd au pire une
-  heure d'affichage de tendances, jamais une mesure de polaire.
+  lui faire supprimer les dernières 48 h de flux enregistré.
 
 Une **avance** de l'horloge, elle, se présente comme un simple trou dans le
 flux et ne demande rien de particulier. Seule vraie ambiguïté restante,
@@ -724,16 +796,6 @@ inhérente au problème : pendant l'heure d'automne qui existe **deux fois**
 (2 h → 3 h → on recule → 2 h), les archives de ces deux heures portent les
 mêmes horodatages et se lisent mélangées — aucun format à base d'heure
 locale ne peut faire mieux.
-
-**La page Statistiques (📈) reste presque vide** — elle vit du tampon
-glissant. Vérifiez d'abord qu'il est actif (*⚙ > Sources & tampon*) : sans
-lui, les statistiques ne portent que sur ce qui est arrivé depuis le
-lancement, et la page le dit. Ensuite, cliquez sur *Relire le tampon* : le
-message qui suit indique combien de trames ont été relues et jusqu'à quelle
-heure. Une ligne absente du tableau des tendances a deux causes possibles :
-la grandeur n'est pas cochée dans *⚙ > Statistiques* (le pied de tableau
-compte alors ce qui est reçu mais masqué), ou elle n'existe simplement pas
-sur votre passerelle (la profondeur, par exemple, si aucun sondeur n'émet).
 
 **Des angles de près qui semblent trop serrés** — c'est presque toujours
 la girouette, pas le calcul. Quand deux voies annoncent du vent apparent,

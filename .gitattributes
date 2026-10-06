@@ -1,0 +1,6 @@
+# Scripts Windows : toujours en fins de ligne CRLF, quel que soit le reglage
+# git du poste -- cmd.exe peut mal trouver ses etiquettes (goto) dans un
+# fichier aux fins de ligne LF seules, et l'archive ZIP de GitHub suit ces
+# attributs.
+*.bat text eol=crlf
+*.cmd text eol=crlf

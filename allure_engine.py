@@ -69,7 +69,6 @@ import csv
 import io
 import math
 import re
-import threading
 import time
 from collections import defaultdict, deque
 
@@ -2826,461 +2825,6 @@ def replay_log_lines(path):
 
 
 # =========================================================================
-# Statistiques de tendance (page "Statistiques")
-# =========================================================================
-#
-# Ce bloc repond a une question differente de tout le reste du module. La
-# polaire demande des instants STABLES et jette tout le reste ; les
-# statistiques, elles, veulent au contraire TOUT ce qui passe, manoeuvres
-# comprises, parce que ce qu'on y cherche n'est pas la performance du bateau
-# mais la METEO et la marche du bord : le vent forcit-il, la pression
-# baisse-t-elle, ai-je fait plus de route cette heure-ci que la precedente.
-#
-# D'ou un enregistreur separe, volontairement simple : des series
-# (instant, valeur) bornees par un horizon, et un accumulateur de distance
-# par heure pleine. Aucun lissage, aucun filtre de manoeuvre -- les moyennes
-# glissantes se calculent a la demande sur la fenetre demandee.
-#
-# Il est alimente par PolarEngine (attribut .trend), donc par les MEMES
-# valeurs arbitrees que les cadrans : les statistiques ne peuvent pas
-# raconter une autre histoire que le suivi en direct. Et comme le meme
-# moteur sait rejouer un fichier, remplir l'historique au demarrage depuis
-# le tampon glissant ne demande aucun code de decodage supplementaire (voir
-# App._backfill_trend).
-
-# Grandeurs suivies. kind : "linear" (moyenne arithmetique, min/max),
-# "angle_rel" (angle SIGNE bord/bord, -180..180, moyenne circulaire),
-# "angle_abs" (releve 0..360, moyenne circulaire).
-TREND_FIELDS = (
-    # cle            libelle                       unite  dec  kind
-    ("tws",          "Vent reel",                  "kn",   1, "linear"),
-    ("aws",          "Vent apparent",              "kn",   1, "linear"),
-    ("wind_gust_kn", "Rafales (station)",          "kn",   1, "linear"),
-    ("twa",          "Angle du vent reel",         "deg",  0, "angle_rel"),
-    ("awa",          "Angle du vent apparent",     "deg",  0, "angle_rel"),
-    ("wind_dir_deg", "Direction du vent reel",     "deg",  0, "angle_abs"),
-    ("stw",          "Vitesse surface",            "kn",   2, "linear"),
-    ("sog",          "Vitesse fond",               "kn",   2, "linear"),
-    ("cog",          "Route fond",                 "deg",  0, "angle_abs"),
-    ("pressure",     "Pression atmospherique",     "hPa",  1, "linear"),
-    ("air_temp",     "Temperature de l'air",       "deg C", 1, "linear"),
-    ("water_temp",   "Temperature de l'eau",       "deg C", 1, "linear"),
-    ("humidity",     "Humidite relative",          "%",    0, "linear"),
-    ("depth",        "Profondeur",                 "m",    1, "linear"),
-)
-TREND_KEYS = tuple(k for k, _l, _u, _d, _t in TREND_FIELDS)
-TREND_META = {k: (lbl, unit, dec, kind) for k, lbl, unit, dec, kind in TREND_FIELDS}
-
-# Grandeurs qui viennent des cadrans (PolarEngine._note_display) plutot que
-# de extract_ambient : elles sont deja arbitrees et, pour le vent vrai,
-# RECALCULEES a partir du vent apparent (voir la note en tete de module).
-TREND_FROM_DISPLAY = ("twa", "tws", "stw", "sog", "awa", "aws")
-
-# Fenetres proposees par defaut, en secondes. L'instantane n'en fait pas
-# partie : c'est la derniere valeur connue, pas une moyenne.
-TREND_WINDOWS_DEFAULT = (300, 600, 1800, 3600)
-TREND_WINDOW_CHOICES = (60, 120, 300, 600, 900, 1800, 3600, 7200, 10800, 21600)
-
-# Au-dela de ce trou entre deux mesures de vitesse fond, on n'integre plus :
-# supposer que le bateau a tenu sa vitesse pendant une coupure de dix
-# minutes fabriquerait des milles qui n'ont pas ete parcourus.
-TREND_MAX_GAP_S = 120.0
-
-# Horizon par defaut des series (2 h) : de quoi servir une fenetre de 60 min
-# et une courbe qui montre d'ou l'on vient. L'accumulateur horaire, lui, ne
-# garde que des totaux et couvre bien plus loin pour presque rien.
-TREND_HORIZON_DEFAULT_S = 7200.0
-TREND_HOURS_KEPT = 72
-
-
-def _circular_mean_deg(values):
-    """Moyenne circulaire, en degres. None si la resultante est nulle (des
-    angles exactement opposes n'ont pas de moyenne, et en inventer une
-    serait pire que de ne rien dire)."""
-    x = sum(math.cos(math.radians(v)) for v in values)
-    y = sum(math.sin(math.radians(v)) for v in values)
-    if abs(x) < 1e-12 and abs(y) < 1e-12:
-        return None
-    return math.degrees(math.atan2(y, x))
-
-
-def _linear_slope(points):
-    """Pente d'une regression lineaire sur [(t, v)], en unite PAR SECONDE.
-    None si moins de deux instants distincts."""
-    n = len(points)
-    if n < 2:
-        return None
-    t0 = points[0][0]
-    sx = sy = sxx = sxy = 0.0
-    for t, v in points:
-        x = t - t0
-        sx += x
-        sy += v
-        sxx += x * x
-        sxy += x * v
-    denom = n * sxx - sx * sx
-    if abs(denom) < 1e-9:
-        return None
-    return (n * sxy - sx * sy) / denom
-
-
-class TrendRecorder:
-    """
-    Historique court de toutes les grandeurs suivies + distance sur le fond
-    par heure pleine.
-
-    Ecrit depuis le fil d'ecoute UDP (via PolarEngine) et lu depuis
-    l'interface : add() est protege par un verrou, et toutes les lectures
-    rendent des COPIES -- une liste qu'on parcourt pendant qu'une trame
-    arrive n'a pas a se demander si elle change sous elle.
-    """
-
-    def __init__(self, horizon_s=TREND_HORIZON_DEFAULT_S, hours_kept=TREND_HOURS_KEPT):
-        self.horizon_s = float(horizon_s)
-        self.hours_kept = int(hours_kept)
-        self._lock = threading.Lock()
-        self._series = {k: deque() for k in TREND_KEYS}
-        # {cle_heure_epoch: {"nm": distance, "sec": duree integree}}
-        self._hours = {}
-        self._last_sog = None      # (t, sog) precedent, pour l'integration
-        self.first_t = None
-        self.last_t = None
-        self.n_added = 0
-        self.clock_jumps = 0       # changements d'heure encaisses (voir clock_jump)
-
-    # ---------- Ecriture ----------
-    def set_horizon(self, horizon_s):
-        with self._lock:
-            self.horizon_s = max(60.0, float(horizon_s))
-            for key in self._series:
-                self._prune_locked(key)
-
-    def add(self, key, t, value):
-        """Ajoute une mesure. Les valeurs implausibles sont ECARTEES en
-        silence (voir AMBIENT_BOUNDS) : une capture reelle contient des
-        trames tronquees, et une seule vitesse a 7000 noeuds suffirait a
-        rendre une moyenne horaire absurde."""
-        if key not in self._series or value is None:
-            return False
-        try:
-            v = float(value)
-        except (TypeError, ValueError):
-            return False
-        if v != v:  # NaN
-            return False
-        bounds = _TREND_BOUNDS.get(key)
-        if bounds is not None and not (bounds[0] <= v <= bounds[1]):
-            return False
-        with self._lock:
-            dq = self._series[key]
-            dq.append((t, v))
-            self.n_added += 1
-            if self.first_t is None or t < self.first_t:
-                self.first_t = t
-            if self.last_t is None or t > self.last_t:
-                self.last_t = t
-            if key == "sog":
-                self._integrate_locked(t, v)
-            self._prune_locked(key)
-        return True
-
-    def _prune_locked(self, key):
-        dq = self._series[key]
-        if not dq:
-            return
-        cutoff = dq[-1][0] - self.horizon_s
-        while dq and dq[0][0] < cutoff:
-            dq.popleft()
-
-    def _integrate_locked(self, t, sog):
-        """Distance sur le fond, repartie par HEURE PLEINE locale.
-
-        Trapeze entre deux lectures consecutives, decoupe aux frontieres
-        d'heure : une lecture a 09:59 et la suivante a 10:01 n'appartiennent
-        pas a la meme heure, et tout mettre dans l'une des deux fausserait
-        les deux."""
-        prev = self._last_sog
-        self._last_sog = (t, sog)
-        if prev is None:
-            return
-        t0, v0 = prev
-        dt = t - t0
-        if dt <= 0 or dt > TREND_MAX_GAP_S:
-            return
-        speed = (v0 + sog) / 2.0
-        # Decoupage aux frontieres d'heure locale.
-        cur = t0
-        while cur < t:
-            h_start = _hour_floor_epoch(cur)
-            h_end = h_start + 3600.0
-            seg_end = min(t, h_end)
-            seg = seg_end - cur
-            if seg > 0:
-                e = self._hours.setdefault(h_start, {"nm": 0.0, "sec": 0.0})
-                e["nm"] += speed * seg / 3600.0
-                e["sec"] += seg
-            cur = seg_end if seg_end > cur else cur + 1.0
-        if len(self._hours) > self.hours_kept:
-            for k in sorted(self._hours)[:len(self._hours) - self.hours_kept]:
-                del self._hours[k]
-
-    def clear(self):
-        with self._lock:
-            for dq in self._series.values():
-                dq.clear()
-            self._hours.clear()
-            self._last_sog = None
-            self.first_t = self.last_t = None
-            self.n_added = 0
-
-    def clock_jump(self, t):
-        """L'horloge du bord vient de RECULER jusqu'a t : les mesures deja
-        enregistrees avec des horodatages posterieurs sont jetees. Elles ne
-        sont pas fausses en soi, mais chaque fenetre glissante les aurait
-        comptees comme "recentes" pendant toute la duree du recul -- une
-        moyenne sur 5 minutes melangee a une heure d'ecart, c'est une
-        moyenne qui ment. Perdre une heure de tendances (affichage seul,
-        rien n'entre dans une polaire) vaut mieux que les afficher fausses."""
-        with self._lock:
-            for dq in self._series.values():
-                while dq and dq[-1][0] > t:
-                    dq.pop()
-            if self._last_sog is not None and self._last_sog[0] > t:
-                self._last_sog = None
-            h_now = _hour_floor_epoch(t)
-            for key in [k for k in self._hours if k > h_now]:
-                del self._hours[key]
-            starts = [dq[0][0] for dq in self._series.values() if dq]
-            ends = [dq[-1][0] for dq in self._series.values() if dq]
-            self.first_t = min(starts) if starts else None
-            self.last_t = max(ends) if ends else None
-            self.clock_jumps += 1
-
-    def absorb(self, other, replace_upto=None):
-        """Incorpore l'historique d'un AUTRE enregistreur.
-
-        Sert au remplissage depuis le tampon glissant : celui-ci est
-        rejoue dans un enregistreur neuf, a part, puis verse ici. Rejouer
-        des heures anciennes directement dans l'enregistreur vivant aurait
-        melange des horodatages passes a des horodatages presents -- series
-        dans le desordre, et surtout une integration de distance qui aurait
-        compte des allers-retours dans le temps.
-
-        replace_upto : les mesures locales anterieures a cet instant sont
-        JETEES avant la fusion. C'est le cas normal du remplissage depuis
-        le tampon, qui contient exactement les memes trames que le direct :
-        sans cela, la plage commune serait comptee deux fois -- et pas
-        proprement, car l'horodatage du tampon (arrondi a la milliseconde a
-        l'ecriture) ne retombe pas au meme flottant que celui du direct, si
-        bien qu'aucun dedoublonnage par instant ne les reconnaitrait.
-
-        Pour les heures pleines, on garde de chaque cote la version la PLUS
-        COMPLETE -- celle qui couvre le plus de secondes."""
-        with other._lock:
-            src = {k: list(dq) for k, dq in other._series.items()}
-            src_hours = {k: dict(v) for k, v in other._hours.items()}
-        with self._lock:
-            for key, pts in src.items():
-                if not pts:
-                    continue
-                dq = self._series.setdefault(key, deque())
-                keep = [(t, v) for t, v in dq
-                        if replace_upto is None or t > replace_upto]
-                merged = sorted(keep + pts, key=lambda p: p[0])
-                dq.clear()
-                dq.extend(merged)
-                self._prune_locked(key)
-            for hkey, e in src_hours.items():
-                cur = self._hours.get(hkey)
-                if cur is None or e["sec"] > cur["sec"]:
-                    self._hours[hkey] = dict(e)
-            if len(self._hours) > self.hours_kept:
-                for k in sorted(self._hours)[:len(self._hours) - self.hours_kept]:
-                    del self._hours[k]
-            ts = [dq[0][0] for dq in self._series.values() if dq]
-            te = [dq[-1][0] for dq in self._series.values() if dq]
-            self.first_t = min(ts) if ts else None
-            self.last_t = max(te) if te else None
-            self.n_added += sum(len(v) for v in src.values())
-
-    # ---------- Lecture ----------
-    def series(self, key, since=None):
-        with self._lock:
-            dq = self._series.get(key)
-            if not dq:
-                return []
-            if since is None:
-                return list(dq)
-            return [(t, v) for t, v in dq if t >= since]
-
-    def last(self, key):
-        with self._lock:
-            dq = self._series.get(key)
-            return (dq[-1][0], dq[-1][1]) if dq else None
-
-    def covered_s(self, now=None):
-        """Duree reellement couverte par l'historique."""
-        with self._lock:
-            if self.first_t is None or self.last_t is None:
-                return 0.0
-            oldest = self.last_t - self.horizon_s
-            start = max(self.first_t, oldest)
-            end = self.last_t if now is None else max(self.last_t, now)
-            return max(0.0, end - start)
-
-    def stats(self, key, now, window_s):
-        """Statistiques d'une grandeur sur les window_s dernieres secondes.
-
-        None si rien dans la fenetre : une case vide dit "pas de mesure",
-        ce qui est une information ; une valeur recopiee d'il y a une heure
-        serait un mensonge.
-        """
-        meta = TREND_META.get(key)
-        if meta is None:
-            return None
-        kind = meta[3]
-        pts = self.series(key, since=now - window_s)
-        if not pts:
-            return None
-        values = [v for _t, v in pts]
-        out = {
-            "n": len(values), "first": values[0], "last": values[-1],
-            "t_first": pts[0][0], "t_last": pts[-1][0],
-            "span_s": pts[-1][0] - pts[0][0],
-        }
-        if kind == "linear":
-            out["mean"] = sum(values) / len(values)
-            out["min"] = min(values)
-            out["max"] = max(values)
-            slope = _linear_slope(pts)
-            out["slope_per_h"] = None if slope is None else slope * 3600.0
-            # Ecart type : dit si la moyenne resume quelque chose de stable
-            # ou une bagarre entre 5 et 30 noeuds.
-            m = out["mean"]
-            out["sd"] = math.sqrt(sum((v - m) ** 2 for v in values) / len(values))
-        else:
-            mean = _circular_mean_deg(values)
-            if mean is None:
-                return None
-            if kind == "angle_abs":
-                mean %= 360.0
-            else:
-                mean = (mean + 180.0) % 360.0 - 180.0
-            out["mean"] = mean
-            # Min/max n'ont pas de sens sur un angle (l'ecart entre 359 et 1
-            # vaut 2 degres). On rend a la place la DISPERSION angulaire :
-            # 0 = tous les releves confondus, 90 = direction indecise.
-            r = math.hypot(sum(math.cos(math.radians(v)) for v in values),
-                           sum(math.sin(math.radians(v)) for v in values)) / len(values)
-            out["spread_deg"] = math.degrees(math.acos(max(-1.0, min(1.0, r))))
-            out["min"] = out["max"] = None
-            out["sd"] = None
-            out["slope_per_h"] = None
-        return out
-
-    def table(self, now, windows):
-        """{cle: {"instant": v ou None, window_s: stats ou None}} pour toutes
-        les grandeurs suivies."""
-        out = {}
-        for key in TREND_KEYS:
-            row = {"instant": None, "instant_t": None}
-            lastv = self.last(key)
-            if lastv is not None:
-                row["instant_t"], row["instant"] = lastv
-            for w in windows:
-                row[w] = self.stats(key, now, w)
-            out[key] = row
-        return out
-
-    def buckets(self, key, now, step_s, count):
-        """Serie AGREGEE par tranches de step_s, la derniere se terminant a
-        'now' : c'est ce que mange un tableau facon Windguru.
-
-        Rend [{"t0","t1","mean","min","max","n"}] du plus ancien au plus
-        recent, avec mean=None pour une tranche sans mesure -- un trou doit
-        se voir comme un trou."""
-        meta = TREND_META.get(key)
-        if meta is None or step_s <= 0 or count <= 0:
-            return []
-        kind = meta[3]
-        # Tranches alignees sur l'horloge : une colonne "10:00-10:10" se
-        # compare d'un jour a l'autre, "il y a 3 a 13 minutes" non.
-        end = math.floor(now / step_s) * step_s + step_s
-        edges = [end - (count - i) * step_s for i in range(count + 1)]
-        pts = self.series(key, since=edges[0])
-        slots = [[] for _ in range(count)]
-        for t, v in pts:
-            idx = int((t - edges[0]) // step_s)
-            if 0 <= idx < count:
-                slots[idx].append(v)
-        out = []
-        for i, vals in enumerate(slots):
-            cell = {"t0": edges[i], "t1": edges[i + 1], "n": len(vals),
-                    "mean": None, "min": None, "max": None}
-            if vals:
-                if kind == "linear":
-                    cell["mean"] = sum(vals) / len(vals)
-                    cell["min"] = min(vals)
-                    cell["max"] = max(vals)
-                else:
-                    m = _circular_mean_deg(vals)
-                    if m is not None:
-                        cell["mean"] = m % 360.0 if kind == "angle_abs" else (m + 180.0) % 360.0 - 180.0
-            out.append(cell)
-        return out
-
-    def hourly_distances(self, now=None, count=12):
-        """[(debut_heure_epoch, milles, couverture_0_1)] des 'count'
-        dernieres heures PLEINES, la plus recente en dernier. L'heure en
-        cours y figure aussi, sa couverture disant ou l'on en est.
-
-        La couverture est la part de l'heure reellement mesuree : 0,3 sur
-        une heure signifie "18 minutes de flux", et la distance affichee
-        n'est alors pas celle de l'heure entiere. Le dire vaut mieux que de
-        laisser croire a une heure creuse."""
-        now = time.time() if now is None else now
-        with self._lock:
-            hours = dict(self._hours)
-        h_now = _hour_floor_epoch(now)
-        out = []
-        for i in range(count - 1, -1, -1):
-            key = h_now - i * 3600.0
-            e = hours.get(key)
-            if e is None:
-                out.append((key, None, 0.0))
-            else:
-                elapsed = 3600.0 if key < h_now else max(1.0, now - h_now)
-                out.append((key, e["nm"], min(1.0, e["sec"] / elapsed)))
-        return out
-
-    def total_distance(self, since=None):
-        """Distance cumulee sur le fond depuis 'since' (toutes les heures
-        connues si None)."""
-        with self._lock:
-            return sum(e["nm"] for k, e in self._hours.items()
-                       if since is None or k + 3600.0 > since)
-
-
-# Bornes de plausibilite des grandeurs suivies : celles d'AMBIENT_BOUNDS
-# quand elles existent, plus celles des grandeurs de cadran.
-_TREND_BOUNDS = dict(AMBIENT_BOUNDS)
-_TREND_BOUNDS.update({
-    "tws": (0.0, 200.0), "aws": (0.0, 250.0),
-    "twa": (-180.0, 180.0), "awa": (-180.0, 180.0),
-    "stw": (0.0, 80.0),
-})
-
-
-def _hour_floor_epoch(t):
-    """Debut de l'heure pleine LOCALE contenant t. Passe par la date
-    complete plutot que par une division : sur les fuseaux a decalage non
-    entier (Inde, Marquises, Terre-Neuve) et aux changements d'heure, un
-    simple floor(t/3600) ne tombe pas sur une heure ronde locale."""
-    lt = time.localtime(t)
-    return time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, lt.tm_hour, 0, 0, 0, 0, -1))
-
-
-# =========================================================================
 # Orchestrateur
 # =========================================================================
 
@@ -3426,12 +2970,6 @@ class PolarEngine:
         # pose par l'application quand la fonction est activee ; None sinon,
         # et l'ingestion n'y touche alors pas.
         self.maneuver_watch = None
-        # Enregistreur de tendances (voir TrendRecorder) -- pose par
-        # l'application, partage entre TOUS les moteurs successifs : chaque
-        # prise fabrique un moteur neuf, alors que l'historique meteo, lui,
-        # ne doit pas repartir de zero a chaque bouton "Demarrer". None =
-        # rien n'est enregistre et l'ingestion ne paie rien.
-        self.trend = None
 
     def _resolve_source(self, styp, seen, now):
         """Voie qui doit alimenter le calcul pour ce type de trame, d'apres
@@ -3498,12 +3036,6 @@ class PolarEngine:
         if sog is not None:
             self.last_sog_reading = {"t": t, "sog": sog}
             self._note_display("sog", t, sog)
-        if cog is not None and self.trend is not None:
-            # La route fond n'a pas de cadran (elle ne se lit pas d'un coup
-            # d'oeil), mais elle a sa ligne dans les statistiques -- et elle
-            # doit venir de la source ARBITREE, comme la vitesse fond, pas du
-            # premier GPS qui parle.
-            self.trend.add("cog", t, cog)
         if self.maneuver_watch is not None and (cog is not None or sog is not None):
             self.maneuver_watch.add(t, cog=cog, sog=sog)
 
@@ -3517,11 +3049,6 @@ class PolarEngine:
         cutoff = t - self.DISPLAY_HISTORY_S
         while dq and dq[0][0] < cutoff:
             dq.popleft()
-        # Les statistiques se nourrissent des MEMES valeurs arbitrees que les
-        # cadrans : elles ne peuvent donc pas raconter une autre histoire que
-        # le suivi en direct (voir TrendRecorder).
-        if self.trend is not None:
-            self.trend.add(key, t, value)
 
     def display_readings(self, now, window_s):
         """Valeurs AMORTIES pour l'affichage : moyenne glissante sur les
@@ -3561,7 +3088,7 @@ class PolarEngine:
 
     def _accept_for_priority(self, styp, port, t, usable=True):
         """True si cette voie doit alimenter le calcul pour ce type de trame a
-        cet instant. Les voies ecartees restent comptees dans les statistiques
+        cet instant. Les voies ecartees restent comptees dans les compteurs
         (lines_deprioritized) et, pour le vent, restent observables voie par
         voie (last_apparent_by_port) : ecarter une source du calcul ne doit
         jamais revenir a la rendre invisible.
@@ -3656,7 +3183,7 @@ class PolarEngine:
           - le segment de configuration OUVERT commencait "dans le futur" :
             journal.resolve(t) ne trouvait plus rien, chaque echantillon
             etait rejete "sans configuration" ;
-          - fenetres et rearmements (manoeuvre, affichage, tendances)
+          - fenetres et rearmements (manoeuvre, affichage)
             melangeaient l'avant et l'apres du saut.
 
         Une AVANCE de l'horloge, elle, est inoffensive : elle se presente
@@ -3699,8 +3226,6 @@ class PolarEngine:
         for seg in self.journal.all_segments():
             if seg.end is None and seg.start > t:
                 seg.start = t
-        if self.trend is not None:
-            self.trend.clock_jump(t)
 
     def ingest_line(self, t, raw, port=None):
         self._check_clock(t)
@@ -3840,19 +3365,6 @@ class PolarEngine:
                 typ, val, unit, name = groups[i], groups[i + 1], groups[i + 2], groups[i + 3]
                 if typ and val:
                     self.context["xdr"][(typ.strip().upper(), (name or "").strip())] = val
-
-        # Grandeurs d'ambiance (pression, temperatures, humidite, vent de la
-        # station...) pour les statistiques : elles ne concernent aucun
-        # calcul de polaire, d'ou ce passage a part, tout au bout, et
-        # seulement si quelqu'un les ecoute. Vitesse et route fond en sont
-        # EXCLUES : elles ont deja ete servies plus haut par la source
-        # arbitree (voir _note_ground), et les reprendre ici laisserait
-        # n'importe quel GPS secondaire ecrire dans la meme serie.
-        if self.trend is not None:
-            for key, val in extract_ambient(styp, fields).items():
-                if key in ("sog", "cog"):
-                    continue
-                self.trend.add(key, t, val)
 
         self._maybe_emit(t)
 
