@@ -443,14 +443,22 @@ def make_scrollable(parent, height=420):
     sans raison a la molette/au trackpad. Ici, quand le contenu (inner) est
     moins haut que la zone visible (canvas), la scrollregion est calee EXACTEMENT
     sur la hauteur visible : aucun defilement residuel n'est plus possible, et
-    la molette est carrement ignoree (evenement laisse remonter) tant qu'il n'y
-    a reellement rien a faire defiler."""
+    la molette n'y a rien a faire tant que tout est visible.
+
+    La molette elle-meme n'est PAS geree ici : la zone se signale a
+    l'aiguilleur commun (voir install_wheel_routing), qui decide pour toute
+    l'application quelle zone defile."""
     outer = tk.Frame(parent, bg=BG_APP)
     canvas = tk.Canvas(outer, bg=BG_APP, highlightthickness=0, height=height)
+    canvas._allure_scroll_area = True
     vsb = tk.Scrollbar(outer, orient="vertical", command=canvas.yview)
     canvas.configure(yscrollcommand=vsb.set)
-    canvas.pack(side="left", fill="both", expand=True)
+    # L'ascenseur est pose AVANT la zone : Tk sert les widgets dans l'ordre,
+    # et un canvas pose le premier reclame sa largeur par defaut (pres de
+    # 400 px) -- dans une colonne etroite, il ne restait plus rien pour
+    # l'ascenseur, qui disparaissait (la liste des voilures des Polaires).
     vsb.pack(side="right", fill="y")
+    canvas.pack(side="left", fill="both", expand=True)
 
     inner = tk.Frame(canvas, bg=BG_APP)
     win_id = canvas.create_window((0, 0), window=inner, anchor="nw")
@@ -473,17 +481,96 @@ def make_scrollable(parent, height=420):
         state["canvas_h"] = event.height
         _sync_scrollregion()
 
-    def _on_mousewheel(event):
-        if state["inner_h"] <= state["canvas_h"]:
-            return  # contenu deja entierement visible -- rien a defiler
-        canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
-
     inner.bind("<Configure>", _on_inner_configure)
     canvas.bind("<Configure>", _on_canvas_configure)
-    canvas.bind("<Enter>", lambda e: canvas.bind_all("<MouseWheel>", _on_mousewheel))
-    canvas.bind("<Leave>", lambda e: canvas.unbind_all("<MouseWheel>"))
 
     return outer, inner
+
+
+# =========================================================================
+# Molette de la souris -- UNE seule regle pour toute l'application
+#
+# La molette fait defiler la zone SOUS LA SOURIS : la plus interieure qui a
+# reellement quelque chose a faire defiler. Une liste qui deborde (passes,
+# archives, guide de voilure...) defile elle-meme, jusqu'au bout et pas
+# au-dela -- arrivee en butee, elle ne passe pas la main a la page ; une
+# liste qui tient entiere n'a rien a faire defiler et laisse defiler la page
+# qui la contient. Un trace matplotlib garde la molette pour son zoom.
+#
+# Avant, chaque zone defilante s'emparait de la molette pour toute
+# l'application en passant sous la souris (bind_all), et la relachait en
+# sortant -- or Tk signale ces entrees/sorties de facon irreguliere des
+# qu'on survole un widget enfant, et les listes defilaient en plus d'elles-
+# memes. Selon le dernier mouvement, la molette faisait donc defiler la
+# liste, la page, ou les DEUX a la fois. Un seul aiguilleur, pose une fois,
+# decide desormais pour tout le monde.
+# =========================================================================
+
+# Classes que Tk fait defiler d'elles-memes a la molette : leur reaction
+# native est retiree (elles defileraient sinon deux fois, par Tk PUIS par
+# l'aiguilleur), c'est l'aiguilleur qui s'en charge.
+_WHEEL_LIST_CLASSES = ("Treeview", "Listbox", "Text")
+# Lignes par cran de molette dans une liste : la valeur native de Tk.
+_WHEEL_LIST_LINES = 3
+
+
+def _wheel_target(widget):
+    """Zone a faire defiler pour une molette au-dessus de widget : la plus
+    interieure qui deborde reellement, ou None."""
+    w = widget
+    while w is not None:
+        if getattr(w, "_allure_wheel_owner", False):
+            return None
+        try:
+            # Sur un ascenseur, c'est lui qui fait defiler sa liste (liaison
+            # native de Tk) : la page qui la contient ne doit pas suivre.
+            if w.winfo_class() in ("Scrollbar", "TScrollbar"):
+                return None
+            scrollable = (getattr(w, "_allure_scroll_area", False)
+                          or w.winfo_class() in _WHEEL_LIST_CLASSES)
+            if scrollable:
+                first, last = w.yview()
+                if first > 0.0 or last < 1.0:
+                    return w
+        except (tk.TclError, AttributeError, TypeError, ValueError):
+            pass
+        w = getattr(w, "master", None)
+    return None
+
+
+def install_wheel_routing(root):
+    """Pose l'aiguilleur de molette (voir plus haut) -- une fois, a la
+    creation de la fenetre principale ; il vaut pour toutes ses fenetres."""
+    rest = {}
+
+    def on_wheel(event):
+        # Maj+molette (defilement horizontal, balayage lateral d'un pave
+        # tactile) et Alt+molette restent aux liaisons natives des listes :
+        # seule la molette nue est aiguillee.
+        if not event.delta or event.state & (0x0001 | 0x20000):
+            return
+        try:
+            under = root.winfo_containing(event.x_root, event.y_root)
+        except (KeyError, tk.TclError):
+            return
+        target = _wheel_target(under)
+        if target is None:
+            return
+        # Un pave tactile envoie de petits pas plutot que des crans entiers :
+        # ils se cumulent jusqu'a faire une ligne (ou un cran de page), au
+        # lieu d'etre arrondis a zero un par un.
+        step = (120.0 / _WHEEL_LIST_LINES
+                if target.winfo_class() in _WHEEL_LIST_CLASSES else 120.0)
+        key = str(target)
+        acc = rest.get(key, 0.0) + event.delta
+        n = int(acc / step)
+        rest[key] = acc - n * step
+        if n:
+            target.yview_scroll(-n, "units")
+
+    for cls in _WHEEL_LIST_CLASSES:
+        root.bind_class(cls, "<MouseWheel>", "")
+    root.bind_all("<MouseWheel>", on_wheel, add="+")
 
 
 def apply_mask(text, groups, sep, pad=False):
@@ -786,6 +873,7 @@ def _draw_wind_arrow(canvas, cx, cy, r, wind_from_deg, speed_frac, color,
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
+        install_wheel_routing(self)
         self.title(f"{pcfg.APP_NAME} v{pcfg.APP_VERSION} — {pcfg.APP_TAGLINE}")
         # Le logo d'Allure (disque bleu, voile blanche) en icone de fenetre
         # et de barre des taches : sans cela Tk affiche sa plume -- y compris
@@ -1107,6 +1195,7 @@ class App(tk.Tk):
         et l'unique bouton demarrer/arreter."""
         bar = tk.Frame(parent, bg=BG_PANEL)
         bar.pack(fill="x")
+        self._acq_bar_frame = bar
         self._acq_bar_border = tk.Frame(parent, bg=COLOR_BORDER, height=1)
         self._acq_bar_border.pack(fill="x")
         inner = tk.Frame(bar, bg=BG_PANEL)
@@ -1484,8 +1573,7 @@ class App(tk.Tk):
         # joue le role d'onglet actif : elle s'allume, et le bandeau des
         # etapes disparait entierement -- on est dans les reglages, pas dans
         # le parcours des donnees. Il revient a sa place exacte en sortant
-        # (before=content_area : sans cela, un pack() le rangerait APRES la
-        # zone de contenu, en bas de la fenetre).
+        # (voir plus bas).
         if hasattr(self, "settings_btn"):
             self.settings_btn.configure(
                 bg=BG_NAV_ACTIVE if in_settings else BG_HEADER,
@@ -1501,7 +1589,11 @@ class App(tk.Tk):
             if in_settings:
                 self._steps_row.pack_forget()
             elif not self._steps_row.winfo_manager():
-                self._steps_row.pack(fill="x", before=self.content_area)
+                # Sa place exacte : AU-DESSUS de la barre d'acquisition (voir
+                # _build_ui). Repose "avant le contenu", il revenait SOUS
+                # elle -- l'ordre des bandeaux changeait selon qu'on etait
+                # passe ou non par les Parametres.
+                self._steps_row.pack(fill="x", before=self._acq_bar_frame)
         self._current_step = key
         # Memorise la derniere etape visitee (voir __init__) -- ecriture
         # automatique a chaque navigation, fichier separe et minuscule.
@@ -3341,18 +3433,20 @@ class App(tk.Tk):
         f_maxp = section(inner, "Polaire max (routage)")
         note(f_maxp, "Sur un cargo a voile ET moteur, le moteur fait partie de la "
                       "voilure : chaque cas de vent (force, orientation) appelle un JEU "
-                      "voiles/moteur, pas une voile seule. Cochee, cette option met les "
-                      "configurations moteur en concurrence dans la polaire max, au meme "
-                      "titre que les voiles -- et le guide de voilure dira donc aussi "
-                      "QUAND passer au moteur. Decochee (voilier pur), elles restent "
-                      "disponibles mais decochees a l'ouverture de la page.",
+                      "voiles/moteur, pas une voile seule. Cochee, cette option ouvre "
+                      "l'etape Polaires sur la propulsion \"Tout confondu\" : voiles et "
+                      "moteurs concourent ensemble dans la polaire max -- et le guide de "
+                      "voilure dit donc aussi QUAND passer au moteur. Decochee (voilier "
+                      "pur), l'etape s'ouvre sur \"Voiles seules\". Le choix fait ensuite sur "
+                      "l'etape elle-meme est retenu d'une fois sur l'autre ; modifier ce "
+                      "reglage le remplace.",
              wraplength="auto")
         maxp_row = tk.Frame(f_maxp, bg=BG_APP)
         maxp_row.pack(fill="x", padx=6, pady=(0, 8))
         self.max_allure_engine_var = tk.BooleanVar(
             value=bool(self.config_data.get("max_polar_include_engine", True)))
         tk.Checkbutton(maxp_row, text="Le moteur fait partie de la voilure "
-                                       "(configurations moteur en concurrence par defaut)",
+                                       "(etape Polaires ouverte sur \"Tout confondu\")",
                        variable=self.max_allure_engine_var, bg=BG_APP, fg=FG_LABEL,
                        selectcolor=BG_PANEL, activebackground=BG_APP,
                        font=FONT_LABEL_BOLD).pack(side="left")
@@ -5761,7 +5855,8 @@ class App(tk.Tk):
         self._max_cfg_vars = []       # [(BooleanVar, (voiles, moteurs, derive), libelle)]
         self._max_cfg_code = {}       # (voiles, moteurs, derive) -> "C1", "C2"...
         self._max_checked = {}        # coches memorisees d'une reconstruction a l'autre
-        self._max_engine_rule = None  # regle "moteur dans la voilure" des coches par defaut
+        self._max_all_configs = []    # [((voiles, moteurs, derive), effectif)] de l'entrepot
+        self._max_family = None       # propulsion choisie (voir _max_family_of)
         self._max_codes = []          # codes des configurations de la table courante
         self._max_result = None       # (twa, tws, grid, counts, winners, mask, labels, clipped)
         self._max_hidden_tws = set()  # vents masques d'un clic dans la legende
@@ -5819,7 +5914,16 @@ class App(tk.Tk):
         wrap = self.MAX_LEFT_WIDTH - 50
         f_ask = section(left, "Quelle voilure pour ce cap / ce vent ?", side="bottom")
         f_opt = section(left, "Trous et pointes", side="bottom")
-        f_cfg = section(left, "Configurations en concurrence", expand=True)
+        # On choisit d'abord la PROPULSION (voile pure, voile + ME, voile +
+        # SB...), puis, dans la liste qui suit, les voilures de cette
+        # propulsion qui concourent. Choisir parmi toutes les configurations
+        # d'un coup obligeait a decocher une a une celles qu'on ne voulait
+        # pas comparer.
+        f_fam = section(left, "Propulsion")
+        self._max_family_var = tk.StringVar(value="")
+        self._max_fam_box = tk.Frame(f_fam, bg=BG_APP)
+        self._max_fam_box.pack(fill="x", padx=6, pady=(2, 4))
+        f_cfg = section(left, "Voilures en concurrence", expand=True)
 
         btn_row = tk.Frame(f_cfg, bg=BG_APP)
         btn_row.pack(fill="x", padx=6, pady=(2, 0))
@@ -5827,7 +5931,7 @@ class App(tk.Tk):
                   padx=6, cursor="hand2").pack(side="left")
         tk.Button(btn_row, text="Tout decocher", command=lambda: self._max_check_all(False),
                   padx=6, cursor="hand2").pack(side="left", padx=(6, 0))
-        note(f_cfg, "Double-clic sur une configuration : elle seule.", pady=(2, 2),
+        note(f_cfg, "Double-clic sur une voilure : elle seule.", pady=(2, 2),
              wraplength=wrap)
         cfg_outer, self._max_cfg_box = make_scrollable(f_cfg, height=1)
         cfg_outer.pack(fill="both", expand=True, padx=(4, 2), pady=(0, 4))
@@ -5878,7 +5982,8 @@ class App(tk.Tk):
         self._max_ask_result = tk.Label(f_ask, text="", bg=BG_APP, fg=FG_LABEL,
                                          font=FONT_LABEL_BOLD, wraplength=wrap,
                                          justify="left", anchor="w")
-        self._max_ask_result.pack(fill="x", padx=6, pady=(0, 6))
+        # Pose a la premiere reponse (voir _max_ask_say) : vide, il prendrait
+        # une ligne a la liste des voilures pour rien.
 
         # --- Colonne de droite : un en-tete court, puis la vue ---
         head = tk.Frame(right, bg=BG_APP)
@@ -5910,6 +6015,9 @@ class App(tk.Tk):
         self._max_ax = self._max_fig.add_subplot(111, projection="polar", facecolor=BG_PANEL)
         self._max_canvas = FigureCanvasTkAgg(self._max_fig, master=plot_frame)
         self._max_canvas.get_tk_widget().configure(bg=BG_APP, highlightthickness=0)
+        # La molette y zoome (voir _on_max_polar_scroll) : l'aiguilleur commun
+        # ne doit rien faire defiler a sa place.
+        self._max_canvas.get_tk_widget()._allure_wheel_owner = True
         self._max_canvas.get_tk_widget().pack(fill="both", expand=True)
         # Infobulle de SURVOL : une polaire porte des centaines de cases, et
         # aller chercher chacune dans un tableau casse le fil de la lecture.
@@ -5980,46 +6088,166 @@ class App(tk.Tk):
                           activebackground=BG_NAV_ACTIVE if on else BG_NAV,
                           font=FONT_LABEL_BOLD if on else FONT_LABEL)
 
+    # Propulsions proposees a l'etape Polaires : "Voiles seules", puis une
+    # par FAMILLE de moteurs -- tiree des codes moteur des Parametres
+    # (Voiles & moteurs), rien n'est fige ici -- et "Tout confondu" quand il
+    # y en a plusieurs : voiles et moteurs concourent alors ensemble, le
+    # moteur fait partie de la voilure.
+    MAX_FAMILY_PURE = "Voiles seules"
+    MAX_FAMILY_ALL = "Tout confondu"
+
+    @staticmethod
+    def _engine_family(code):
+        """Famille d'un code moteur : le code sans ses chiffres. 1ME et 2ME
+        sont tous deux "ME" -- un ou deux moteurs du meme type, c'est la meme
+        propulsion, et c'est entre elles qu'on veut comparer les voilures.
+        Un code sans chiffre est sa propre famille."""
+        fam = "".join(ch for ch in code if not ch.isdigit()).strip()
+        return (fam or code).upper()
+
+    @classmethod
+    def _max_family_of(cls, engines):
+        """Propulsion d'une configuration, d'apres ses moteurs : "Voiles
+        seules", "Voiles + ME", "Voiles + ME + SB"..."""
+        fams = sorted({cls._engine_family(e) for e in engines})
+        return cls.MAX_FAMILY_PURE if not fams else "Voiles + " + " + ".join(fams)
+
+    def _max_family_options(self):
+        """([(propulsion, libelle affiche)], ligne des codes), dans l'ordre de
+        la liste des moteurs des Parametres. La ligne des codes nomme ce que
+        chaque famille regroupe ("ME = 1ME, 2ME") : la famille se deduit des
+        codes, l'utilisateur doit voir lesquels elle reunit."""
+        engine_list = [str(c) for c in self.config_data.get("engine_list") or []]
+        rank = {}
+        for k, code in enumerate(engine_list):
+            rank.setdefault(self._engine_family(code), k)
+        codes_of, count_of = {}, {}
+        for cfg, _n in self._max_all_configs:
+            fam = self._max_family_of(cfg[1])
+            count_of[fam] = count_of.get(fam, 0) + 1
+            codes = codes_of.setdefault(fam, set())
+            codes.update(cfg[1])
+            # Les codes des Parametres de la meme famille, meme absents de
+            # cette voilure : "ME" designe 1ME ET 2ME.
+            for code in engine_list:
+                if self._engine_family(code) in fam.split(" + ")[1:]:
+                    codes.add(code)
+
+        def order(fam):
+            parts = fam.split(" + ")[1:]
+            return (len(parts), min((rank.get(p, len(engine_list)) for p in parts),
+                                    default=-1), fam)
+
+        out, details = [], []
+        for fam in sorted(count_of, key=order):
+            out.append((fam, f"{fam} ({count_of[fam]})"))
+            parts = fam.split(" + ")[1:]
+            if len(parts) == 1:
+                codes = sorted(codes_of[fam],
+                               key=lambda c: (engine_list.index(c) if c in engine_list
+                                              else len(engine_list), c))
+                if any(c.upper() != parts[0] for c in codes):
+                    details.append(f"{parts[0]} = {', '.join(codes)}")
+        if len(out) > 1:
+            out.append((self.MAX_FAMILY_ALL,
+                        f"{self.MAX_FAMILY_ALL} ({len(self._max_all_configs)})"))
+        return out, "   ".join(details)
+
     def _refresh_config_choices(self):
-        """Reconstruit la liste des configurations -- l'entrepot ou les passes
-        incluses ont change -- en gardant ce qui etait coche, puis retrace si
-        l'etape est sous les yeux. Sinon le trace attendra qu'on y arrive
-        (voir _show_step) : inutile de calculer une polaire que personne ne
-        regarde."""
+        """Reconstruit le choix de propulsion et la liste des voilures --
+        l'entrepot ou les passes incluses ont change -- en gardant ce qui
+        etait choisi et coche, puis retrace si l'etape est sous les yeux.
+        Sinon le trace attendra qu'on y arrive (voir _show_step) : inutile de
+        calculer une polaire que personne ne regarde."""
         if hasattr(self, "store_size_lbl"):
             self._refresh_store_size_label()
         if not hasattr(self, "_max_cfg_box"):
             return
-        configs = self.persistent_store.configs(session_ids=self._included_session_ids())
+        self._max_all_configs = self.persistent_store.configs(
+            session_ids=self._included_session_ids())
+        # Code STABLE : le rang de la configuration dans tout l'entrepot, et
+        # non parmi les cochees ni dans la propulsion choisie -- decocher C2
+        # ou changer de propulsion ne renomme pas C3, et le guide,
+        # l'infobulle et la fiche d'un point parlent la meme langue que la
+        # liste.
+        self._max_cfg_code = {cfg: f"C{k + 1}"
+                              for k, (cfg, _n) in enumerate(self._max_all_configs)}
+        labelled, codes_line = self._max_family_options()
+        options = [fam for fam, _lbl in labelled]
+        # Propulsion affichee : le dernier choix fait ici s'il est proposable
+        # -- y compris quand il revient apres avoir manque un moment (passes
+        # exclues puis reincluses) --, sinon le reglage "le moteur fait partie
+        # de la voilure" (Parametres > Lissage & table) : "Tout confondu" s'il
+        # est coche, "Voiles seules" sinon. Le choix est memorise AVEC le
+        # reglage sous lequel il a ete fait : modifier ce reglage le remplace,
+        # meme si l'on quitte sans repasser par cette etape.
+        engine_in = bool(self.config_data.get("max_polar_include_engine", True))
+        if self.ui_state.get("polar_propulsion_rule", engine_in) != engine_in:
+            self.ui_state.pop("polar_propulsion", None)
+            self.ui_state.pop("polar_propulsion_rule", None)
+        remembered = self.ui_state.get("polar_propulsion")
+        if remembered in options:
+            self._max_family = remembered
+        elif engine_in and self.MAX_FAMILY_ALL in options:
+            self._max_family = self.MAX_FAMILY_ALL
+        elif self.MAX_FAMILY_PURE in options:
+            self._max_family = self.MAX_FAMILY_PURE
+        else:
+            self._max_family = options[0] if options else None
+        for child in self._max_fam_box.winfo_children():
+            child.destroy()
+        self._max_family_var.set(self._max_family or "")
+        # Deux propulsions par ligne, libelles courts : chaque ligne prise ici
+        # l'est a la liste des voilures. Ce que chaque famille regroupe tient
+        # sur UNE ligne discrete en dessous.
+        for k, (opt, text) in enumerate(labelled):
+            tk.Radiobutton(self._max_fam_box, text=text, value=opt,
+                           variable=self._max_family_var,
+                           command=lambda o=opt: self._max_set_family(o),
+                           bg=BG_APP, fg=FG_LABEL, selectcolor=BG_PANEL,
+                           activebackground=BG_APP, font=FONT_LABEL, anchor="w"
+                           ).grid(row=k // 2, column=k % 2, sticky="w", padx=(0, 6))
+        if codes_line:
+            tk.Label(self._max_fam_box, text=codes_line, bg=BG_APP, fg=FG_LABEL_DIM,
+                     font=("Segoe UI", 8), anchor="w", justify="left",
+                     wraplength=self.MAX_LEFT_WIDTH - 60
+                     ).grid(row=(len(labelled) + 1) // 2, column=0, columnspan=2,
+                            sticky="w", padx=(4, 0))
+        self._max_rebuild_cfg_list()
+
+    def _max_set_family(self, family):
+        """Choix d'une propulsion : la liste ne montre plus que ses voilures.
+        Le choix est retenu d'une fois sur l'autre."""
+        self._max_family = family
+        # Le bouton suit meme quand le choix ne vient pas d'un clic.
+        self._max_family_var.set(family)
+        self.ui_state["polar_propulsion"] = family
+        self.ui_state["polar_propulsion_rule"] = bool(
+            self.config_data.get("max_polar_include_engine", True))
+        try:
+            pcfg.save_ui_state(self.ui_state)
+        except OSError:
+            pass
+        self._max_rebuild_cfg_list()
+
+    def _max_rebuild_cfg_list(self):
+        """Liste des voilures de la propulsion choisie, cochees comme on les
+        avait laissees -- toutes cochees la premiere fois : la propulsion a
+        deja fait le tri."""
         for var, cfg, _lbl in self._max_cfg_vars:
             self._max_checked[cfg] = bool(var.get())
-        # Le moteur fait-il partie de la voilure ? Sur ce bateau (cargo a
-        # voile et moteur), OUI par defaut : tout concourt. En mode "voilier
-        # pur" (reglage decoche), les configurations moteur restent
-        # proposees mais decochees -- sauf si le bateau n'a QUE des
-        # configurations moteur, auquel cas tout est coche plutot que
-        # d'ouvrir sur une page vide. Changer ce reglage reapplique la regle
-        # a toutes les coches.
-        engine_in = bool(self.config_data.get("max_polar_include_engine", True))
-        if engine_in != self._max_engine_rule:
-            self._max_checked.clear()
-            self._max_engine_rule = engine_in
-        any_pure_sail = any(not engines for (_s, engines, _d), _c in configs)
         for child in self._max_cfg_box.winfo_children():
             child.destroy()
         self._max_cfg_vars = []
-        self._max_cfg_code = {}
-        for k, (cfg, count) in enumerate(configs):
+        for cfg, count in self._max_all_configs:
+            if (self._max_family != self.MAX_FAMILY_ALL
+                    and self._max_family_of(cfg[1]) != self._max_family):
+                continue
             sails, engines, derive = cfg
-            # Code STABLE : le rang de la configuration dans l'entrepot, et
-            # non parmi les cochees -- decocher C2 ne renomme pas C3, et le
-            # guide, l'infobulle et la fiche d'un point parlent la meme
-            # langue que cette liste.
-            code = f"C{k + 1}"
+            code = self._max_cfg_code[cfg]
             label = (f"{'+'.join(sails) or '-'} / {'+'.join(engines) or '-'} / "
                      f"{pe.DERIVE_LABELS.get(derive, '-')}  (n={count})")
-            var = tk.BooleanVar(value=self._max_checked.get(
-                cfg, engine_in or (not engines) or not any_pure_sail))
+            var = tk.BooleanVar(value=self._max_checked.get(cfg, True))
             # wraplength : une configuration complete depasse la largeur de
             # la colonne, et une etiquette tronquee ne dit plus CE QU'ON
             # COCHE -- elle passe a la ligne au lieu d'etre coupee.
@@ -6034,7 +6262,8 @@ class App(tk.Tk):
             cb.bind("<Double-Button-1>",
                     lambda _e, c=cfg: (self._max_solo(c), "break")[1])
             self._max_cfg_vars.append((var, cfg, label))
-            self._max_cfg_code[cfg] = code
+        # Nouvelle liste : on la reprend par le haut.
+        self._max_cfg_box.master.yview_moveto(0.0)
         if getattr(self, "_current_step", None) == "polaires":
             self._max_polar_recompute()
 
@@ -6193,11 +6422,12 @@ class App(tk.Tk):
         cochee, c'est SA polaire -- l'en-tete dit alors sa maturite et ce
         qui n'a jamais ete mesure, c'est-a-dire ou aller chercher des
         donnees."""
-        if not self._max_cfg_vars:
+        family = self._max_family or ""
+        if not self._max_all_configs:
             txt = ("Entrepot vide (ou aucune passe incluse) : traitez d'abord une "
                    "session -- la polaire se tracera ici automatiquement.")
         elif not cfg_list:
-            txt = "Aucune configuration cochee : cochez-en au moins une a gauche."
+            txt = f"{family} : aucune voilure cochee -- cochez-en au moins une a gauche."
         elif len(cfg_list) == 1:
             sails, engines, derive = cfg_list[0]
             mat = self.persistent_store.config_confidence(
@@ -6213,8 +6443,10 @@ class App(tk.Tk):
             if mat["missing"]:
                 txt += "  Jamais mesure : " + ", ".join(mat["missing"]) + "."
         else:
-            txt = (f"Meilleure vitesse parmi {len(cfg_list)} configurations "
-                   f"(sur {len(self._max_cfg_vars)}).")
+            scope = ("toutes propulsions" if family == self.MAX_FAMILY_ALL
+                     else family[:1].lower() + family[1:])
+            txt = (f"Meilleure vitesse parmi {len(cfg_list)} voilures "
+                   f"(sur {len(self._max_cfg_vars)}, {scope}).")
         self._max_title_lbl.configure(text=txt)
 
     def _max_polar_redraw(self, symmetric):
@@ -6842,31 +7074,36 @@ class App(tk.Tk):
         win.update_idletasks()
         self._center_on_parent(win)
 
+    def _max_ask_say(self, text):
+        self._max_ask_result.configure(text=text)
+        if not self._max_ask_result.winfo_manager():
+            self._max_ask_result.pack(fill="x", padx=6, pady=(0, 6))
+
     def _max_polar_lookup(self):
         if not self._max_result or not self._max_result[1]:
-            self._max_ask_result.configure(text="Aucune table : cochez une configuration.")
+            self._max_ask_say("Aucune table : cochez une voilure.")
             return
         twa_values, tws_values, grid, _counts, winners, mask, labels, clipped = self._max_result
         try:
             twa = abs(float(self._max_ask_twa.get().replace(",", ".")))
             tws = float(self._max_ask_tws.get().replace(",", "."))
         except ValueError:
-            self._max_ask_result.configure(text="Entrez un angle et un vent numeriques.")
+            self._max_ask_say("Entrez un angle et un vent numeriques.")
             return
         i = min(range(len(twa_values)), key=lambda k: abs(twa_values[k] - twa))
         j = min(range(len(tws_values)), key=lambda k: abs(tws_values[k] - tws))
         v = grid[i][j]
         if v is None:
-            self._max_ask_result.configure(
-                text=f"Case {twa_values[i]:g}° / {tws_values[j]:g} nds : aucune mesure "
+            self._max_ask_say(
+                f"Case {twa_values[i]:g}° / {tws_values[j]:g} nds : aucune mesure "
                      f"ni interpolation. Le bateau n'a jamais ete observe la.")
             return
         ci = winners[i][j]
         who = (f"{self._max_code_of(ci)} = {labels[ci]}" if ci is not None
                else "interpolation entre deux voilures mesurees")
         origin = "interpolee" if mask[i][j] else "mesuree"
-        self._max_ask_result.configure(
-            text=f"Case {twa_values[i]:g}° / {tws_values[j]:g} nds : {v:.2f} nds "
+        self._max_ask_say(
+            f"Case {twa_values[i]:g}° / {tws_values[j]:g} nds : {v:.2f} nds "
                  f"({origin}).\nVoilure : {who}")
 
     def _max_export_name(self, default):

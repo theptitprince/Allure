@@ -13,7 +13,7 @@ bateau *fait vraiment* : Allure écoute les trames, enregistre des passes
 annotées par voilure, les accumule sortie après sortie dans un entrepôt, et
 en tire des polaires par configuration, une polaire max pour le routage
 (`.pol`, `.csv`, TimeZero) et un guide de voilure. Version actuelle :
-2.1a — l'historique des livraisons est dans [CHANGELOG.md](CHANGELOG.md).
+2.1b — l'historique des livraisons est dans [CHANGELOG.md](CHANGELOG.md).
 
 Python 3.8+, tkinter et matplotlib — Windows en priorité.
 
@@ -317,9 +317,10 @@ Trois étapes numérotées — le parcours normal des données :
    plus — ce n'est pas un mode dans lequel l'application bascule), la
    correction a posteriori de l'annotation d'une passe, le **recalcul d'une
    passe depuis le tampon**, et la corbeille.
-3. **Polaires** — la **polaire max** : pour chaque case cap/vent, la
-   meilleure vitesse parmi les configurations cochées ; une seule cochée,
-   c'est sa polaire à elle. Tracé automatique dès l'arrivée sur l'étape,
+3. **Polaires** — la **polaire max** : on choisit la propulsion (voiles
+   seules, voiles + moteur…), puis les voilures qui concourent ; pour
+   chaque case cap/vent, la meilleure vitesse l'emporte. Une seule voilure
+   cochée, c'est sa polaire à elle. Tracé automatique dès l'arrivée sur l'étape,
    guide de voilure, exports `.pol` (Expedition), `.csv` et TimeZero (voir
    ci-dessous).
 
@@ -436,6 +437,15 @@ photo qu'on agrandit. Le zoom **survit à un retracé** : cocher une
 configuration ne vous rejette pas à la vue de départ. Et l'on ne peut pas
 perdre le dessin hors de l'écran — le déplacement est borné.
 
+**La molette fait défiler ce qui est sous la souris**, et cela seul. Une
+liste qui déborde (les passes de l'Entrepôt, le guide de voilure, les
+voilures…) défile elle-même, jusqu'au bout et pas au-delà : arrivée en
+butée, elle ne passe pas la main à la page. Une liste qui tient entière n'a
+rien à faire défiler et laisse défiler la page qui la contient. La molette
+sur l'ascenseur d'une liste fait défiler cette liste, et la page reste en
+place. Maj + molette garde son défilement horizontal. Sur le tracé de la
+polaire, la molette zoome.
+
 **Masquer un vent.** Une polaire à quinze courbes se lit mieux à cinq :
 cliquez une valeur dans la légende des vents, à droite du cercle, et sa
 courbe disparaît ; recliquez, elle revient. L'échelle, elle, ne bouge pas —
@@ -536,22 +546,45 @@ répondent à *« que vaut le bateau sous cette voilure ? »* ; un logiciel de
 routage (qtVlm, Adrena, OpenCPN…), lui, veut **une seule table pleine** :
 *« que vaut le bateau, point »* — à charge pour l'équipage de porter la
 bonne toile. L'étape **Polaires** la construit directement : pour chaque
-case cap/vent, la **meilleure vitesse** parmi les configurations cochées
+case cap/vent, la **meilleure vitesse** parmi les voilures cochées
 l'emporte — et la page retient **laquelle** a gagné, ce qui donne en prime
 le **guide de voilure** (« pour ce cap et ce vent, portez ça »),
 consultable case par case (bouton *Guide de voilure*) ou via le petit
-chercheur *Quelle voilure ?*. **Une seule configuration cochée** — un
+chercheur *Quelle voilure ?*. **Une seule voilure cochée** — un
 double-clic sur elle dans la liste suffit — et c'est **sa** polaire : la
 vue par configuration n'est qu'un cas particulier de la polaire max, elle
 n'a plus d'écran à part.
+
+**D'abord la propulsion, ensuite les voilures.** En tête de la colonne de
+gauche, on choisit ce qu'on compare, parmi les propulsions présentes dans
+l'entrepôt (passes incluses) :
+
+- **Voiles seules** — les configurations sans moteur ;
+- **Voiles + ME**, **Voiles + SB**… — une famille de moteurs chacune. La
+  famille se déduit des codes moteur — **vos** codes, ceux de la roue
+  dentée → *Voiles & moteurs* — : c'est le code sans ses chiffres, si bien
+  que `1ME` et `2ME` forment *Voiles + ME* — un ou deux moteurs du même
+  type, c'est la même propulsion. Une ligne discrète sous les choix rappelle
+  ce que chaque famille regroupe (« ME = 1ME, 2ME »). Une configuration qui
+  mêle deux familles forme la sienne (*Voiles + ME + SB*) ;
+- **Tout confondu** — voiles et moteurs concourent ensemble (voir plus
+  bas) ; proposé dès qu'il y a au moins deux propulsions.
+
+La liste *Voilures en concurrence* ne montre ensuite que les voilures de
+cette propulsion, toutes cochées la première fois : la propulsion a déjà
+fait le tri, on n'y décoche que ce qu'on veut écarter. Le chiffre entre
+parenthèses compte les voilures de chaque propulsion. Le choix de la
+propulsion est retenu d'un lancement à l'autre ; les coches, le temps de la
+séance — changer de propulsion puis revenir ne les perd pas.
 
 **Lisible d'abord.** Le tracé dispose de toute la hauteur de la page, que
 le bateau ait deux configurations ou vingt : rien dont la taille dépend de
 leur nombre ne s'empile au-dessus ou au-dessous de lui. Leur liste vit dans
 la colonne de gauche, avec sa propre barre de défilement et les boutons
 *Tout cocher* / *Tout décocher* ; chacune y porte un **code** (C1, C2…) qui
-ne bouge pas quand on coche ou décoche — décocher C2 ne renomme pas C3 — et
-que reprennent le guide, l'infobulle et la fiche d'un point. C'est le rang
+ne bouge pas quand on coche, décoche ou change de propulsion — décocher C2
+ne renomme pas C3 — et que reprennent le guide, l'infobulle et la fiche
+d'un point. C'est le rang
 de la configuration dans l'entrepôt, la plus fournie d'abord : il peut
 donc changer quand une passe est ajoutée, incluse ou exclue. La légende des
 vents se tient
@@ -562,10 +595,13 @@ gauche — Tk sert les bords avant le centre, rien ne peut donc être repoussé
 hors du cadre. Sur ce bateau — un
 cargo à voile **et** moteur — **le moteur fait partie de la voilure** :
 chaque cas de vent appelle un *jeu* voiles/moteur, pas une voile seule.
-Les configurations moteur concourent donc **par défaut**, et le guide de
+L'étape s'ouvre donc **par défaut** sur *Tout confondu* (quand il est
+proposé), et le guide de
 voilure dit aussi *quand passer au moteur*. Pour une polaire voile pure,
-décochez-les dans la liste — ou changez le défaut dans la roue dentée →
-*Lissage & table* (option « Le moteur fait partie de la voilure »). Les
+choisissez *Voiles seules* — ou changez le défaut dans la roue dentée →
+*Lissage & table* (option « Le moteur fait partie de la voilure » :
+décochée, l'étape s'ouvre sur *Voiles seules* ; modifier ce réglage
+remplace le dernier choix retenu). Les
 **trous** de la grille sont
 bouchés par **interpolation linéaire le long du TWA** (jamais au-delà de la
 première ou de la dernière mesure — prétendre une vitesse au vent debout

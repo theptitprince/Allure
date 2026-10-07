@@ -98,7 +98,7 @@ APP_CREDIT = "ETDEL 2026"
 # visage (nouvelle etape, nouveau format, refonte) ; la lettre suffit pour
 # une correction ou un ajustement. Chaque livraison a son entree dans
 # CHANGELOG.md, a la racine du depot.
-APP_VERSION = "2.1a"
+APP_VERSION = "2.1b"
 
 # =========================================================================
 # Ou vivent les fichiers

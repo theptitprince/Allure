@@ -23,6 +23,44 @@ relit toujours les données de n'importe quelle version antérieure.
 
 ---
 
+## 2.1b
+
+Les polaires se choisissent en deux temps, et la molette fait enfin
+défiler ce qu'on vise.
+
+### Modifié
+
+- **Polaires : d'abord la propulsion, ensuite les voilures.** En tête de la
+  colonne de gauche, parmi les propulsions présentes dans l'entrepôt :
+  *Voiles seules*, une famille de moteurs chacune — déduite des codes
+  moteur, chiffres retirés : *Voiles + ME*, *Voiles + SB*, avec en dessous
+  ce que chacune regroupe (« ME = 1ME, 2ME ») —, et *Tout confondu* dès
+  qu'il y en a deux. La liste, rebaptisée *Voilures en concurrence*, ne
+  montre plus que les voilures de la propulsion choisie, toutes cochées la
+  première fois. Le choix est retenu d'un lancement à l'autre, les coches
+  le temps de la séance ; les codes C1, C2… ne changent pas d'une
+  propulsion à l'autre.
+- Le réglage « Le moteur fait partie de la voilure » (Paramètres →
+  *Lissage & table*) fixe désormais la propulsion proposée à l'ouverture :
+  *Tout confondu* s'il est coché, *Voiles seules* sinon. Le modifier
+  remplace le dernier choix retenu, même sans repasser par les Polaires.
+
+### Corrigé
+
+- **Molette.** Elle fait défiler la zone sous la souris, et elle seule.
+  Dans l'Entrepôt, elle faisait défiler tantôt la liste des passes, tantôt
+  la page, tantôt les deux à la fois. Une liste en butée ne passe plus la
+  main à la page ; une liste qui tient entière la laisse défiler ; la
+  molette sur l'ascenseur d'une liste ne fait défiler qu'elle. Maj +
+  molette garde son défilement horizontal. Les petits pas d'un pavé
+  tactile se cumulent au lieu d'être perdus.
+- **Ascenseur invisible** de la liste des voilures (Polaires) : une zone
+  défilante étroite ne laissait plus de place à son ascenseur.
+- **Bandeau des étapes** : après un passage par les Paramètres, il revenait
+  sous la barre d'acquisition au lieu de reprendre sa place au-dessus.
+
+---
+
 ## 2.1a
 
 L'étape Polaires change de visage : elle affiche désormais **directement la
