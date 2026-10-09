@@ -98,7 +98,7 @@ APP_CREDIT = "ETDEL 2026"
 # visage (nouvelle etape, nouveau format, refonte) ; la lettre suffit pour
 # une correction ou un ajustement. Chaque livraison a son entree dans
 # CHANGELOG.md, a la racine du depot.
-APP_VERSION = "2.1b"
+APP_VERSION = "2.2a"
 
 # =========================================================================
 # Ou vivent les fichiers
@@ -334,14 +334,17 @@ def _fixup_port(p, defaults):
     return out
 
 
-def _fixup_str_list(value, defaults):
+def _fixup_str_list(value, defaults, allow_empty=False):
+    """Liste de codes nettoyee. allow_empty : une liste VIDE est un choix
+    (un voilier sans moteur), pas une donnee manquante -- seule une valeur
+    absente ou d'un autre type retombe sur le defaut."""
     if not isinstance(value, list):
         return list(defaults)
     out = []
     for v in value:
         if isinstance(v, str) and v.strip() and v.strip() not in out:
             out.append(v.strip())
-    return out or list(defaults)
+    return out if (out or allow_empty) else list(defaults)
 
 
 def _clamp(value, lo, hi, default):
@@ -412,7 +415,8 @@ def fixup(cfg):
     out["stale_timeout"] = _clamp(cfg.get("stale_timeout"), 2.0, 300.0, d["stale_timeout"])
 
     out["sail_list"] = _fixup_str_list(cfg.get("sail_list"), d["sail_list"])
-    out["engine_list"] = _fixup_str_list(cfg.get("engine_list"), d["engine_list"])
+    out["engine_list"] = _fixup_str_list(cfg.get("engine_list"), d["engine_list"],
+                                         allow_empty=True)
 
     out["twa_bin_deg"] = _clamp(cfg.get("twa_bin_deg"), 1.0, 45.0, d["twa_bin_deg"])
     out["tws_bin_kn"] = _clamp(cfg.get("tws_bin_kn"), 0.5, 20.0, d["tws_bin_kn"])
@@ -770,6 +774,10 @@ def _fixup_trash_entry(entry):
         if rec is None:
             return None
         out["session_record"] = rec
+        # Version d'avant recalcul : "Restaurer" doit la REMETTRE en place
+        # (et non la jeter comme un doublon), meme apres un relancement.
+        if entry.get("replace"):
+            out["replace"] = True
     else:
         sessions_raw = entry.get("sessions_index")
         out["sessions_index"] = [r for r in (_fixup_session_record(rec) for rec in

@@ -1166,21 +1166,8 @@ class SteadyStateSmoother:
 
 
 # =========================================================================
-# Journal de configuration voile/moteur/derive (segments temporels)
+# Journal de configuration voile/moteur (segments temporels)
 # =========================================================================
-
-# Position de derive : etat BINAIRE (contrairement aux voiles/moteurs, qui
-# peuvent se combiner librement) -- on ne stocke donc pas un tuple de codes
-# mais une simple chaine parmi DERIVE_STATES, ou None ("non renseignee",
-# y compris pour toutes les donnees accumulees AVANT l'ajout de cette
-# fonctionnalite -- aucune migration necessaire, voir PolarSampleStore).
-DERIVE_STATES = ("haute", "basse")
-DERIVE_LABELS = {"haute": "Haute", "basse": "Basse", None: "Non renseignee"}
-
-
-def _fixup_derive(value):
-    return value if value in DERIVE_STATES else None
-
 
 # =========================================================================
 # Compatibilite ascendante des donnees accumulees
@@ -1192,11 +1179,12 @@ def _fixup_derive(value):
 # parce qu'un champ a ete ajoute entre deux versions serait inacceptable.
 #
 # Trois regles tenues par fixup_sample() ci-dessous :
-#   1. un champ ABSENT prend sa valeur par defaut (un entrepot d'avant la
-#      derive se lit comme "derive non renseignee", pas comme une erreur) ;
+#   1. un champ ABSENT prend sa valeur par defaut (un echantillon sans
+#      moteurs se lit comme "voiles seules", pas comme une erreur) ;
 #   2. un champ INCONNU est ignore sans bruit -- c'est ce qui permet a une
 #      version ANCIENNE de relire un fichier produit par une version plus
-#      recente, l'autre sens de la compatibilite ;
+#      recente, l'autre sens de la compatibilite ; et a une version recente
+#      de relire un champ qu'elle n'utilise plus ;
 #   3. un echantillon reellement inexploitable est ECARTE INDIVIDUELLEMENT,
 #      jamais au prix du chargement complet : un seul enregistrement abime
 #      (coupure pendant l'ecriture, retouche a la main) ne doit pas rendre
@@ -1232,8 +1220,8 @@ def fixup_sample(s):
     """Nettoie un echantillon brut issu d'un fichier. Retourne None si
     l'echantillon est inexploitable -- c'est-a-dire si l'une des trois
     grandeurs qui FONT la polaire (STW, TWA, TWS) manque ou n'est pas un
-    nombre. Tout le reste (voiles, moteurs, derive, horodatage, passe
-    d'origine) est facultatif et prend une valeur par defaut."""
+    nombre. Tout le reste (voiles, moteurs, horodatage, passe d'origine)
+    est facultatif et prend une valeur par defaut."""
     if not isinstance(s, dict):
         return None
     stw, twa, tws = _fixup_number(s.get("stw")), _fixup_number(s.get("twa")), _fixup_number(s.get("tws"))
@@ -1243,9 +1231,6 @@ def fixup_sample(s):
     return {
         "sails": _fixup_codes(s.get("sails")),
         "engines": _fixup_codes(s.get("engines")),
-        # "derive" absent = entrepot anterieur a cette fonctionnalite : c'est
-        # une valeur par defaut, jamais une erreur (voir la regle 1 ci-dessus).
-        "derive": _fixup_derive(s.get("derive")),
         "stw": stw, "twa": twa, "tws": tws,
         "t": _fixup_number(s.get("t")),
         "session_id": str(session_id) if session_id is not None else None,
@@ -1253,14 +1238,13 @@ def fixup_sample(s):
 
 
 class ConfigSegment:
-    __slots__ = ("start", "end", "sails", "engines", "derive")
+    __slots__ = ("start", "end", "sails", "engines")
 
-    def __init__(self, start, end, sails, engines, derive=None):
+    def __init__(self, start, end, sails, engines):
         self.start = start
         self.end = end  # None = segment toujours ouvert (mode live, en cours)
         self.sails = tuple(sorted(sails))
         self.engines = tuple(sorted(engines))
-        self.derive = _fixup_derive(derive)
 
     def contains(self, t):
         if t < self.start:
@@ -1271,15 +1255,15 @@ class ConfigSegment:
 
     def to_dict(self):
         return {"start": self.start, "end": self.end, "sails": list(self.sails),
-                "engines": list(self.engines), "derive": self.derive}
+                "engines": list(self.engines)}
 
     @classmethod
     def from_dict(cls, d):
-        return cls(d["start"], d.get("end"), d.get("sails", []), d.get("engines", []), d.get("derive"))
+        return cls(d["start"], d.get("end"), d.get("sails", []), d.get("engines", []))
 
     def __repr__(self):
         return (f"ConfigSegment({self.start!r}, {self.end!r}, {self.sails!r}, "
-                f"{self.engines!r}, derive={self.derive!r})")
+                f"{self.engines!r})")
 
 
 class ConfigJournal:
@@ -1301,16 +1285,14 @@ class ConfigJournal:
         self._segments = []
         self._live_current = None
 
-    def set_live_config(self, t, sails, engines, derive=None):
+    def set_live_config(self, t, sails, engines):
         sails = tuple(sorted(sails))
         engines = tuple(sorted(engines))
-        derive = _fixup_derive(derive)
         if self._live_current is not None and self._live_current.end is None:
-            if (self._live_current.sails == sails and self._live_current.engines == engines
-                    and self._live_current.derive == derive):
+            if self._live_current.sails == sails and self._live_current.engines == engines:
                 return self._live_current
             self._live_current.end = t
-        seg = ConfigSegment(t, None, sails, engines, derive)
+        seg = ConfigSegment(t, None, sails, engines)
         self._segments.append(seg)
         self._live_current = seg
         return seg
@@ -1337,10 +1319,10 @@ class ConfigJournal:
         self._live_current = None
         return seg
 
-    def add_manual_segment(self, start, end, sails, engines, derive=None):
+    def add_manual_segment(self, start, end, sails, engines):
         if end is not None and end <= start:
             raise ValueError("l'heure de fin doit etre posterieure a l'heure de debut")
-        seg = ConfigSegment(start, end, sails, engines, derive)
+        seg = ConfigSegment(start, end, sails, engines)
         self._segments.append(seg)
         self._segments.sort(key=lambda s: s.start)
         return seg
@@ -1352,10 +1334,10 @@ class ConfigJournal:
                 self._live_current = None
 
     def resolve(self, t):
-        """(sails, engines, derive) actifs a l'instant t, ou None si aucun segment ne couvre t."""
+        """(sails, engines) actifs a l'instant t, ou None si aucun segment ne couvre t."""
         for seg in self._segments:
             if seg.contains(t):
-                return seg.sails, seg.engines, seg.derive
+                return seg.sails, seg.engines
         return None
 
     def all_segments(self):
@@ -1445,16 +1427,16 @@ class PolarSampleStore:
     """
 
     def __init__(self):
-        self._samples = []  # [{"sails":tuple,"engines":tuple,"derive":str|None,"stw":f,"twa":f,"tws":f,"t":f|None,"session_id":str|None}, ...]
+        self._samples = []  # [{"sails":tuple,"engines":tuple,"stw":f,"twa":f,"tws":f,"t":f|None,"session_id":str|None}, ...]
         # Nombre d'echantillons ecartes au dernier from_list() parce
         # qu'inexploitables (voir fixup_sample). Toujours 0 pour un entrepot
         # construit en memoire ; consulte par l'interface pour signaler une
         # perte plutot que de la passer sous silence.
         self.dropped_on_load = 0
 
-    def add(self, sails, engines, stw, twa_signed, tws, t=None, session_id=None, derive=None):
+    def add(self, sails, engines, stw, twa_signed, tws, t=None, session_id=None):
         self._samples.append({
-            "sails": tuple(sorted(sails)), "engines": tuple(sorted(engines)), "derive": _fixup_derive(derive),
+            "sails": tuple(sorted(sails)), "engines": tuple(sorted(engines)),
             "stw": stw, "twa": twa_signed, "tws": tws, "t": t, "session_id": session_id,
         })
 
@@ -1538,15 +1520,13 @@ class PolarSampleStore:
         return s["session_id"] is None or s["session_id"] in session_ids
 
     def configs(self, session_ids=None):
-        """[((sails, engines, derive), count), ...] rencontres, tries par nb
-        d'echantillons decroissant. derive fait partie de la cle au meme
-        titre que voiles/moteurs (voir DERIVE_STATES) : une meme combinaison
-        voiles/moteurs avec une derive differente est une configuration
-        distincte, avec sa propre polaire."""
+        """[((sails, engines), count), ...] rencontres, tries par nb
+        d'echantillons decroissant. Une configuration, c'est une combinaison
+        de voiles et de moteurs : chacune a sa propre polaire."""
         totals = defaultdict(int)
         for s in self._samples:
             if self._included(s, session_ids):
-                totals[(s["sails"], s["engines"], s.get("derive"))] += 1
+                totals[(s["sails"], s["engines"])] += 1
         return sorted(totals.items(), key=lambda kv: -kv[1])
 
     def sails_for_session(self, session_id):
@@ -1557,7 +1537,7 @@ class PolarSampleStore:
         return sorted({s["sails"] for s in self._samples if s["session_id"] == session_id})
 
     def configs_for_session(self, session_id):
-        """[((voiles, moteurs, derive), nombre)] pour cette passe uniquement,
+        """[((voiles, moteurs), nombre)] pour cette passe uniquement,
         triees par nombre d'echantillons decroissant.
 
         Une meme passe peut en contenir plusieurs : il suffit d'avoir change
@@ -1569,12 +1549,12 @@ class PolarSampleStore:
         counts = defaultdict(int)
         for s in self._samples:
             if s["session_id"] == session_id:
-                counts[(s["sails"], s["engines"], s.get("derive"))] += 1
+                counts[(s["sails"], s["engines"])] += 1
         return sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
 
-    def relabel_session_config(self, session_id, old_config, sails, engines, derive=None):
+    def relabel_session_config(self, session_id, old_config, sails, engines):
         """Re-annote a posteriori les echantillons d'une passe qui portent la
-        configuration old_config = (voiles, moteurs, derive), pour leur donner
+        configuration old_config = (voiles, moteurs), pour leur donner
         la configuration indiquee. Retourne le nombre d'echantillons modifies.
 
         Sert a rattraper une annotation fausse APRES coup, une fois la passe
@@ -1582,23 +1562,21 @@ class PolarSampleStore:
         mauvaise voile cochee, decouvert bien plus tard. Ne touche QUE les
         mesures elles-memes (STW/TWA/TWS restent intactes) : c'est une
         correction d'etiquette, pas un recalcul."""
-        old_sails, old_engines, old_derive = old_config
+        old_sails, old_engines = old_config
         old_sails, old_engines = tuple(sorted(old_sails)), tuple(sorted(old_engines))
-        old_derive = _fixup_derive(old_derive)
-        new = {"sails": tuple(sorted(sails)), "engines": tuple(sorted(engines)),
-               "derive": _fixup_derive(derive)}
+        new = {"sails": tuple(sorted(sails)), "engines": tuple(sorted(engines))}
         n = 0
         for s in self._samples:
             if (s["session_id"] == session_id and s["sails"] == old_sails
-                    and s["engines"] == old_engines and s.get("derive") == old_derive):
+                    and s["engines"] == old_engines):
                 s.update(new)
                 n += 1
         return n
 
-    def sample_count(self, sails, engines, derive=None, session_ids=None):
+    def sample_count(self, sails, engines, session_ids=None):
         sails, engines = tuple(sorted(sails)), tuple(sorted(engines))
         return sum(1 for s in self._samples
-                    if s["sails"] == sails and s["engines"] == engines and s.get("derive") == derive
+                    if s["sails"] == sails and s["engines"] == engines
                     and self._included(s, session_ids))
 
     def count_included(self, session_ids=None):
@@ -1619,7 +1597,7 @@ class PolarSampleStore:
                     if s.get("session_id") == session_id
                     and (not kept_only or self._included(s, None)))
 
-    def _cells(self, sails, engines, derive, twa_bin_deg, tws_bin_kn, symmetric,
+    def _cells(self, sails, engines, twa_bin_deg, tws_bin_kn, symmetric,
                session_ids):
         """{(case_twa, case_tws): [echantillons entiers]} pour une
         configuration. Decoupage COMMUN a la table de vitesses et a l'indice
@@ -1630,7 +1608,7 @@ class PolarSampleStore:
         sails, engines = tuple(sorted(sails)), tuple(sorted(engines))
         cells = defaultdict(list)
         for s in self._samples:
-            if s["sails"] != sails or s["engines"] != engines or s.get("derive") != derive:
+            if s["sails"] != sails or s["engines"] != engines:
                 continue
             if not self._included(s, session_ids):
                 continue
@@ -1640,11 +1618,11 @@ class PolarSampleStore:
             cells[(twa_idx, tws_idx)].append(s)
         return cells
 
-    def table(self, sails, engines, derive=None, twa_bin_deg=5.0, tws_bin_kn=2.0, symmetric=True, stat="p90",
+    def table(self, sails, engines, twa_bin_deg=5.0, tws_bin_kn=2.0, symmetric=True, stat="p90",
               session_ids=None):
         """
         Retourne (twa_values, tws_values, grille, comptes) pour la
-        config donnee (voiles + moteurs + derive) : twa_values / tws_values =
+        config donnee (voiles + moteurs) : twa_values / tws_values =
         centres de case tries (deg / noeuds), grille[i][j] = vitesse agregee
         (None si vide), comptes[i][j] = nombre d'echantillons ayant
         contribue a la case.
@@ -1653,7 +1631,7 @@ class PolarSampleStore:
         -- voir _included) ; None = pas de filtre, tout est inclus.
         """
         cells = {k: [s["stw"] for s in v] for k, v in self._cells(
-            sails, engines, derive, twa_bin_deg, tws_bin_kn, symmetric, session_ids).items()}
+            sails, engines, twa_bin_deg, tws_bin_kn, symmetric, session_ids).items()}
         if not cells:
             return [], [], [], []
         twa_idxs = sorted({k[0] for k in cells})
@@ -1671,7 +1649,7 @@ class PolarSampleStore:
             counts.append(crow)
         return twa_values, tws_values, grid, counts
 
-    def confidence_table(self, sails, engines, derive=None, twa_bin_deg=5.0,
+    def confidence_table(self, sails, engines, twa_bin_deg=5.0,
                          tws_bin_kn=2.0, symmetric=True, session_ids=None):
         """Indice de confiance case par case, sur EXACTEMENT le meme
         decoupage que table() -- meme appel a _cells(), donc aucun risque
@@ -1680,7 +1658,7 @@ class PolarSampleStore:
         Retourne (twa_values, tws_values, conf) avec conf[i][j] = le dict de
         confidence_of(), ou None pour une case vide. N'agit sur rien : c'est
         une lecture de l'entrepot, en parallele de la table de vitesses."""
-        cells = self._cells(sails, engines, derive, twa_bin_deg, tws_bin_kn,
+        cells = self._cells(sails, engines, twa_bin_deg, tws_bin_kn,
                             symmetric, session_ids)
         if not cells:
             return [], [], []
@@ -1721,7 +1699,7 @@ class PolarSampleStore:
         """Tout ce que le tableau de l'Entrepot affiche par passe, pour
         TOUTES les passes, en UN SEUL parcours de l'entrepot :
 
-          {session_id: {"configs": [((voiles, moteurs, derive), n), ...],
+          {session_id: {"configs": [((voiles, moteurs), n), ...],
                         "confidence": <dict de session_confidence>,
                         "n_total": <echantillons contenus>,
                         "n_kept":  <echantillons retenus>}}
@@ -1752,7 +1730,7 @@ class PolarSampleStore:
             samples = groups.get(sid, [])
             counts = defaultdict(int)
             for s in samples:
-                counts[(s["sails"], s["engines"], s.get("derive"))] += 1
+                counts[(s["sails"], s["engines"])] += 1
             out[sid] = {
                 "configs": sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])),
                 "confidence": self._session_confidence_of(
@@ -1806,7 +1784,7 @@ class PolarSampleStore:
             info["why"] = f"passe riche : {len(cells)} cases nourries par {info['n']} mesures"
         return info
 
-    def config_confidence(self, sails, engines, derive=None, twa_bin_deg=5.0,
+    def config_confidence(self, sails, engines, twa_bin_deg=5.0,
                           tws_bin_kn=2.0, symmetric=True, session_ids=None):
         """Maturite d'une polaire de configuration : est-elle prete a servir,
         et sinon, que lui manque-t-il ?
@@ -1816,7 +1794,7 @@ class PolarSampleStore:
         donc : combien de cases sont solides ou bonnes, quelles plages
         d'angle et de vent restent absentes. C'est ce qui repond a la seule
         question utile : ou faut-il aller chercher des donnees ?"""
-        cells = self._cells(sails, engines, derive, twa_bin_deg, tws_bin_kn,
+        cells = self._cells(sails, engines, twa_bin_deg, tws_bin_kn,
                             symmetric, session_ids)
         out = {"cells": len(cells), "solid": 0, "usable": 0, "weak": 0,
                "n": 0, "sessions": 0, "score": 0, "level": "D", "word": "fragile",
@@ -1870,7 +1848,7 @@ class PolarSampleStore:
         transforme la polaire max en guide de voilure : pour ce cap et ce
         vent, voila la configuration qui a gagne.
 
-        configs : liste de (voiles, moteurs, derive) a mettre en
+        configs : liste de (voiles, moteurs) a mettre en
         concurrence (typiquement store.configs(), eventuellement filtree).
         Retourne (twa_values, tws_values, grid, counts, winners) :
         memes conventions que table(), plus winners[i][j] = indice dans
@@ -1879,14 +1857,14 @@ class PolarSampleStore:
         dans la case : c'est sur eux que la vitesse retenue est batie.
         """
         norm = []
-        for (sails, engines, derive) in configs:
-            norm.append((tuple(sorted(sails)), tuple(sorted(engines)), derive))
+        for (sails, engines) in configs:
+            norm.append((tuple(sorted(sails)), tuple(sorted(engines))))
         index = {}
         for i, c in enumerate(norm):
             index.setdefault(c, i)
         cells = defaultdict(list)   # (twa_idx, tws_idx, cfg_i) -> [stw]
         for s in self._samples:
-            ci = index.get((s["sails"], s["engines"], s.get("derive")))
+            ci = index.get((s["sails"], s["engines"]))
             if ci is None or not self._included(s, session_ids):
                 continue
             twa = abs(s["twa"]) if symmetric else s["twa"]
@@ -1948,8 +1926,8 @@ class PolarSampleStore:
             "stat": stat,
             "entries": [],
         }
-        for idx, (sails, engines, derive) in enumerate(configs):
-            cells = self._cells(sails, engines, derive, twa_bin_deg, tws_bin_kn,
+        for idx, (sails, engines) in enumerate(configs):
+            cells = self._cells(sails, engines, twa_bin_deg, tws_bin_kn,
                                 symmetric, session_ids)
             samples = cells.get((ti, wi))
             if not samples:
@@ -1971,7 +1949,7 @@ class PolarSampleStore:
             sessions.sort(key=lambda e: (e["t_first"] is None, e["t_first"] or 0.0))
             out["entries"].append({
                 "config_index": idx,
-                "config": (tuple(sorted(sails)), tuple(sorted(engines)), derive),
+                "config": (tuple(sorted(sails)), tuple(sorted(engines))),
                 "n": n,
                 "speed": aggregate(values, stat),
                 "min": values[0], "max": values[-1],
@@ -2236,7 +2214,7 @@ def confidence_of(samples):
 # se retrouve APRES COUP dans les echantillons deja entreposes, sans avoir
 # rien enregistre de plus, par trois signaux :
 #
-#   - le changement de CONFIGURATION (voiles, moteurs, derive) : frontiere
+#   - le changement de CONFIGURATION (voiles, moteurs) : frontiere
 #     absolue, jamais fusionnee -- deux voilures differentes ne sont pas le
 #     meme bord, meme si le changement a dure trente secondes ;
 #   - le VIREMENT ou l'EMPANNAGE : le TWA signe change de bord et y reste.
@@ -2281,11 +2259,16 @@ def _tack_of(twa):
 
 
 def split_into_legs(samples, min_duration_s=LEG_MIN_DURATION_S,
-                    min_samples=LEG_MIN_SAMPLES, gap_s=LEG_GAP_S):
+                    min_samples=LEG_MIN_SAMPLES, gap_s=LEG_GAP_S, excluded_ranges=()):
     """Decoupe les echantillons d'une passe en troncons homogenes.
 
+    excluded_ranges : plages [debut, fin] deja ecartees de cette passe. Leurs
+    bornes decoupent elles aussi, et ne sont jamais recollees : un troncon
+    est alors entierement dedans ou entierement dehors -- meme si les regles
+    du decoupage ont change depuis que la plage a ete ecartee.
+
     Retourne une liste de dicts :
-      i, start, end, n, samples, sails, engines, derive, tack, cause
+      i, start, end, n, samples, sails, engines, tack, cause
     ou 'cause' dit POURQUOI le troncon commence la -- une frontiere qu'on
     ne peut pas expliquer est une frontiere en laquelle on ne peut pas
     avoir confiance.
@@ -2301,7 +2284,6 @@ def split_into_legs(samples, min_duration_s=LEG_MIN_DURATION_S,
         return [{"i": 0, "start": None, "end": None, "n": len(ordered),
                  "samples": list(ordered), "sails": tuple(ordered[0]["sails"]),
                  "engines": tuple(ordered[0]["engines"]),
-                 "derive": ordered[0].get("derive"),
                  "tack": 0, "cause": "sans horodatage"}]
 
     def cfg(s):
@@ -2309,7 +2291,7 @@ def split_into_legs(samples, min_duration_s=LEG_MIN_DURATION_S,
         # et comparer une liste a un tuple ne dirait jamais l'egalite. Le
         # decoupage doit donner le meme resultat qu'on lui passe l'entrepot
         # vivant ou sa forme serialisee.
-        return (tuple(s["sails"]), tuple(s["engines"]), s.get("derive"))
+        return (tuple(s["sails"]), tuple(s["engines"]))
 
     # --- 1. Coupures brutes ---
     cuts = []           # indices de DEBUT de troncon (hors 0)
@@ -2360,6 +2342,21 @@ def split_into_legs(samples, min_duration_s=LEG_MIN_DURATION_S,
             tack_cur, tack_run = t_now, 0
             window.clear()
 
+    # Bornes des plages deja ecartees : un troncon commence au premier
+    # echantillon DANS la plage, et le suivant au premier APRES elle. Ces
+    # bornes-la ne se recollent jamais (voir 3.), qu'une autre raison de
+    # couper y tombe deja ou non.
+    hard = set()
+    for a, b in excluded_ranges or ():
+        for t0, strict in ((a, False), (b, True)):
+            idx = next((i for i, s in enumerate(dated)
+                        if (s["t"] > t0 if strict else s["t"] >= t0)), None)
+            if idx:
+                hard.add(idx)
+                if idx not in causes:
+                    cuts.append(idx)
+                    causes[idx] = "plage ecartee auparavant"
+
     # --- 2. Troncons bruts ---
     edges = [0] + sorted(set(cuts)) + [len(dated)]
     raw = []
@@ -2376,6 +2373,7 @@ def split_into_legs(samples, min_duration_s=LEG_MIN_DURATION_S,
         dur = block[-1]["t"] - block[0]["t"]
         too_small = (dur < min_duration_s or len(block) < min_samples)
         if (merged and too_small and seg["cause"] != "changement de voilure"
+                and seg["lo"] not in hard
                 and cfg(dated[merged[-1]["lo"]]) == cfg(block[0])):
             merged[-1]["hi"] = seg["hi"]
         else:
@@ -2389,7 +2387,7 @@ def split_into_legs(samples, min_duration_s=LEG_MIN_DURATION_S,
         legs.append({
             "i": i, "start": block[0]["t"], "end": block[-1]["t"], "n": len(block),
             "samples": block, "sails": tuple(block[0]["sails"]),
-            "engines": tuple(block[0]["engines"]), "derive": block[0].get("derive"),
+            "engines": tuple(block[0]["engines"]),
             "tack": (1 if sum(nz) > 0 else -1) if nz else 0,
             "cause": seg["cause"],
         })
@@ -2407,7 +2405,6 @@ def split_into_legs(samples, min_duration_s=LEG_MIN_DURATION_S,
             "i": len(legs), "start": None, "end": None, "n": len(undated),
             "samples": list(undated), "sails": tuple(undated[0]["sails"]),
             "engines": tuple(undated[0]["engines"]),
-            "derive": undated[0].get("derive"),
             "tack": 0, "cause": "sans horodatage",
         })
     return legs
@@ -2736,7 +2733,7 @@ def timezero_sails_for_config(sails, engines, sail_map):
 
 def format_csv_table(configs_tables, decimals=2, confidences=None):
     """
-    configs_tables : liste de (sails, engines, derive, twa_values, tws_values, grid, counts).
+    configs_tables : liste de (sails, engines, twa_values, tws_values, grid, counts).
     Format "long" (une ligne par case renseignee) : moins visuel que le
     .pol mais plus facile a retraiter/filtrer dans un tableur, et permet
     d'exporter plusieurs configurations dans un seul fichier.
@@ -2748,11 +2745,11 @@ def format_csv_table(configs_tables, decimals=2, confidences=None):
     """
     buf = io.StringIO()
     writer = csv.writer(buf)
-    head = ["voiles", "moteurs", "derive", "twa_deg", "tws_kn", "stw_kn", "n_echantillons"]
+    head = ["voiles", "moteurs", "twa_deg", "tws_kn", "stw_kn", "n_echantillons"]
     if confidences is not None:
         head += ["confiance", "niveau", "moments_independants", "sorties", "dispersion_pct"]
     writer.writerow(head)
-    for idx, (sails, engines, derive, twa_values, tws_values, grid, counts) in enumerate(
+    for idx, (sails, engines, twa_values, tws_values, grid, counts) in enumerate(
             configs_tables):
         conf = (confidences[idx] if confidences is not None and idx < len(confidences)
                 else None)
@@ -2761,7 +2758,7 @@ def format_csv_table(configs_tables, decimals=2, confidences=None):
                 if v is None:
                     continue
                 line = ["+".join(sails) or "-", "+".join(engines) or "-",
-                        DERIVE_LABELS.get(derive, "-"), twa, tws, round(v, decimals), n]
+                        twa, tws, round(v, decimals), n]
                 if confidences is not None:
                     c = (conf[i][j] if conf and i < len(conf) and j < len(conf[i]) else None)
                     if c:
@@ -3399,14 +3396,14 @@ class PolarEngine:
         if cfg is None:
             self.stats["samples_rejected_no_config"] += 1
             return
-        sails, engines, derive = cfg
-        self.store.add(sails, engines, stw, twa, tws, t=t, derive=derive)
+        sails, engines = cfg
+        self.store.add(sails, engines, stw, twa, tws, t=t)
         self.stats["samples_emitted"] += 1
 
     # ---- pilotage live ----
-    def set_live_config(self, t, sails, engines, derive=None):
-        return self.journal.set_live_config(t, sails, engines, derive)
+    def set_live_config(self, t, sails, engines):
+        return self.journal.set_live_config(t, sails, engines)
 
     # ---- annotation a posteriori (import) ----
-    def add_manual_segment(self, start, end, sails, engines, derive=None):
-        return self.journal.add_manual_segment(start, end, sails, engines, derive)
+    def add_manual_segment(self, start, end, sails, engines):
+        return self.journal.add_manual_segment(start, end, sails, engines)

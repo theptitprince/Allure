@@ -23,6 +23,82 @@ relit toujours les données de n'importe quelle version antérieure.
 
 ---
 
+## 2.2a
+
+La dérive disparaît, les propulsions se cochent, et tout l'affichage a été
+passé en revue — à 100, 125 et 150 %, du petit écran au grand.
+
+### Modifié
+
+- **Polaires : les propulsions se cochent.** La colonne de gauche est une
+  seule liste défilante où chaque propulsion a sa case : *Voiles seules*,
+  puis *Voiles + 1ME*, *Voiles + 2ME*, *Voiles + 1SB*… — une par
+  configuration moteur déclarée dans les Paramètres (*Voiles & moteurs*),
+  d'office et dans le même ordre ; une combinaison enregistrée ensemble
+  (*Voiles + 1ME + 1SB*) a aussi la sienne. Une propulsion encore jamais
+  mesurée garde sa case, grisée. Sous chaque propulsion cochée viennent
+  ses voilures, en retrait, cochées comme on les avait laissées. On combine
+  donc librement — voiles seules *et* voiles + 1SB, par exemple. *Tout
+  confondu* disparaît : il suffit de tout cocher.
+- La liste tient en **une seule colonne** dont chaque libellé passe à la
+  ligne au lieu d'être coupé (les deux colonnes d'avant se tronquaient), et
+  la colonne s'**élargit à la souris** par la poignée qui la sépare du
+  tracé ; sa largeur est retenue.
+- Le choix des propulsions — cochées comme décochées — est retenu d'un
+  lancement à l'autre ; une propulsion qui apparaît ensuite prend le défaut
+  du réglage « Le moteur fait partie de la voilure ». Le choix fait en 2.1b
+  est repris.
+- **La dérive est supprimée**, partout : plus de choix Haute / Basse au
+  démarrage d'une acquisition, à l'import d'un `.log` ni dans la correction
+  d'une passe, plus de colonne dans l'Entrepôt ni dans les exports (le
+  `.csv` par configuration n'a plus que voiles et moteurs). Les données
+  existantes se relisent sans rien perdre : deux configurations qui ne
+  différaient que par la dérive sont réunies.
+- La fenêtre principale s'ouvre à une taille adaptée à l'écran et au zoom
+  de Windows, et retrouve au lancement suivant la taille et la position
+  qu'on lui avait laissées.
+
+### Corrigé
+
+- **Revue complète de l'affichage**, page par page, à 100, 125 et 150 % et
+  sur des écrans de 1040 à 1920 px de large : une quarantaine de textes
+  coupés, de boutons écrasés et de listes sans ascenseur. En particulier :
+  - *Paramètres* : le tableau des voies se cale sur son contenu, avec un
+    ascenseur horizontal et, dessous, le texte complet de la ligne choisie ;
+    les listes Voiles et Moteurs ont un ascenseur ; la grille TimeZero suit
+    les voiles ajoutées ou retirées ; conseils, états et diagnostic
+    s'affichent en entier.
+  - *Acquisition* : compteurs, alertes des voies et bandeau de manœuvre
+    passent à la ligne (« Non, fausse alerte » n'est plus écrasé) ; le
+    cadran grandit avec le zoom ; la fenêtre de choix de la configuration
+    range ses cases en grille.
+  - *Entrepôt* : colonnes des passes et des archives à la bonne largeur,
+    ascenseur horizontal au besoin ; panneau de correction en grille ;
+    fenêtre *Polaire de la passe* avec sa légende à droite du cercle et son
+    bouton *Fermer* toujours visible.
+  - *Polaires* : les exports passent sur deux lignes plutôt que d'être
+    rognés, la légende des vents reste dans la figure, la fiche d'un point
+    tient dans l'écran avec un ascenseur.
+  - Les fenêtres secondaires restent dans l'écran et prennent le thème
+    sombre, ascenseurs compris.
+- **Démarrage** : l'application mettait près de 20 secondes à s'afficher
+  (une zone défilante se remettait en page des centaines de fois) ; elle
+  s'ouvre maintenant en une seconde environ.
+- Entrepôt, archives : la ligne *(tampon)* décalait ses valeurs d'une
+  colonne.
+- Tronçons d'une passe : une plage déjà écartée n'est plus fondue dans un
+  tronçon retenu quand le découpage a changé depuis.
+- Corbeille : la version d'avant un recalcul se restaure correctement, même
+  après un relancement.
+- Paramètres : une liste de moteurs vide (voilier sans moteur) est acceptée
+  au lieu de revenir à la liste par défaut.
+- Au-delà de dix vents, les couleurs se répètent : le trait (Polaires) ou
+  le point creux (polaire de la passe) distingue désormais les courbes.
+- Des messages renvoyaient à une étape *Enregistrement* et à un bouton
+  *Traiter la session* qui n'existent plus.
+
+---
+
 ## 2.1b
 
 Les polaires se choisissent en deux temps, et la molette fait enfin

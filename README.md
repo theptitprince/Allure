@@ -13,7 +13,7 @@ bateau *fait vraiment* : Allure écoute les trames, enregistre des passes
 annotées par voilure, les accumule sortie après sortie dans un entrepôt, et
 en tire des polaires par configuration, une polaire max pour le routage
 (`.pol`, `.csv`, TimeZero) et un guide de voilure. Version actuelle :
-2.1b — l'historique des livraisons est dans [CHANGELOG.md](CHANGELOG.md).
+2.2a — l'historique des livraisons est dans [CHANGELOG.md](CHANGELOG.md).
 
 Python 3.8+, tkinter et matplotlib — Windows en priorité.
 
@@ -296,13 +296,13 @@ Trois étapes numérotées — le parcours normal des données :
    chiffres, qualité de l'échantillonnage, réception, comparaison des
    girouettes, flux NMEA brut). C'est l'écran qu'on laisse ouvert en
    passerelle. Le bouton **⏱** en haut à droite y ramène depuis n'importe
-   où. *Démarrer l'acquisition* demande la configuration (voiles / moteurs /
-   dérive, et durée maximale) dans une seule boîte — la sélection précédente
+   où. *Démarrer l'acquisition* demande la configuration (voiles / moteurs,
+   et durée maximale) dans une seule boîte — la sélection précédente
    est reproposée, repartir sur la même voilure est immédiat. *Arrêter*
    envoie la passe **directement dans l'entrepôt** ; l'écran, lui, ne
    change pas : c'est l'état annoncé dans la barre du haut qui change.
 2. **Entrepôt** — vos passes s'y accumulent, avec la configuration
-   réellement utilisée pour chacune (voiles, moteurs, dérive). Tableau
+   réellement utilisée pour chacune (voiles, moteurs). Tableau
    triable par clic sur les en-têtes ; la case de la colonne *Incluse*
    inclut/exclut une passe du calcul d'un simple clic.
    Interrogation des archives par date (JJ/MM/AAAA) et heure (HH:MM) : un
@@ -317,8 +317,9 @@ Trois étapes numérotées — le parcours normal des données :
    plus — ce n'est pas un mode dans lequel l'application bascule), la
    correction a posteriori de l'annotation d'une passe, le **recalcul d'une
    passe depuis le tampon**, et la corbeille.
-3. **Polaires** — la **polaire max** : on choisit la propulsion (voiles
-   seules, voiles + moteur…), puis les voilures qui concourent ; pour
+3. **Polaires** — la **polaire max** : on coche les propulsions à
+   comparer (voiles seules, voiles + 1ME, voiles + 1SB… — une par
+   configuration moteur des Paramètres), puis leurs voilures ; pour
    chaque case cap/vent, la meilleure vitesse l'emporte. Une seule voilure
    cochée, c'est sa polaire à elle. Tracé automatique dès l'arrivée sur l'étape,
    guide de voilure, exports `.pol` (Expedition), `.csv` et TimeZero (voir
@@ -379,7 +380,7 @@ calcul.
 **Tri automatique à l'entrée** (roue dentée → *Lissage & table*, désactivé
 par défaut) : une passe dont la confiance est inférieure à un seuil peut
 entrer dans l'entrepôt **décochée** plutôt qu'incluse d'office. Le seuil
-**conseillé, 40**, est affiché à côté du champ — c'est la frontière entre
+**conseillé, 40**, est rappelé juste sous le champ — c'est la frontière entre
 *indicative* (C) et *fragile* (D). Plus haut (60, frontière B/C) vous ne
 gardez que les passes bien réparties, utile quand l'entrepôt est déjà
 fourni ; plus bas (20) vous n'écartez que les passes vraiment maigres ; à 0
@@ -389,7 +390,7 @@ fin de prise dit toujours ce qui a été décidé **et pourquoi**. C'est un
 pré-positionnement de case, pas une censure — un clic la réintègre.
 
 **Tout inclure / tout exclure** : une case d'ensemble sous le tableau des
-passes bascule les trente d'un coup, avec le compte des passes incluses à
+passes les bascule toutes d'un coup, avec le compte des passes incluses à
 côté. Trier case par case serait un travail de copiste, et l'on veut souvent
 repartir de zéro pour n'en garder que quelques-unes.
 
@@ -555,65 +556,73 @@ double-clic sur elle dans la liste suffit — et c'est **sa** polaire : la
 vue par configuration n'est qu'un cas particulier de la polaire max, elle
 n'a plus d'écran à part.
 
-**D'abord la propulsion, ensuite les voilures.** En tête de la colonne de
-gauche, on choisit ce qu'on compare, parmi les propulsions présentes dans
-l'entrepôt (passes incluses) :
+**Les propulsions, puis les voilures — des cases à cocher.** Le cadre
+*Configurations en concurrence* est **une seule liste défilante** : chaque
+propulsion y a sa case, et ses voilures suivent en retrait quand elle est
+cochée.
 
 - **Voiles seules** — les configurations sans moteur ;
-- **Voiles + ME**, **Voiles + SB**… — une famille de moteurs chacune. La
-  famille se déduit des codes moteur — **vos** codes, ceux de la roue
-  dentée → *Voiles & moteurs* — : c'est le code sans ses chiffres, si bien
-  que `1ME` et `2ME` forment *Voiles + ME* — un ou deux moteurs du même
-  type, c'est la même propulsion. Une ligne discrète sous les choix rappelle
-  ce que chaque famille regroupe (« ME = 1ME, 2ME »). Une configuration qui
-  mêle deux familles forme la sienne (*Voiles + ME + SB*) ;
-- **Tout confondu** — voiles et moteurs concourent ensemble (voir plus
-  bas) ; proposé dès qu'il y a au moins deux propulsions.
+- **Voiles + 1ME**, **Voiles + 2ME**, **Voiles + 1SB**… — une case par
+  configuration moteur déclarée dans **vos** Paramètres (roue dentée →
+  *Voiles & moteurs*), dans le même ordre, **d'office** : ajoutez un code
+  moteur, sa propulsion apparaît. Tant qu'aucune passe ne l'a mesurée, sa
+  case est grisée ;
+- une combinaison de moteurs enregistrée ensemble (*Voiles + 1ME + 1SB*) a
+  aussi la sienne.
 
-La liste *Voilures en concurrence* ne montre ensuite que les voilures de
-cette propulsion, toutes cochées la première fois : la propulsion a déjà
-fait le tri, on n'y décoche que ce qu'on veut écarter. Le chiffre entre
-parenthèses compte les voilures de chaque propulsion. Le choix de la
-propulsion est retenu d'un lancement à l'autre ; les coches, le temps de la
-séance — changer de propulsion puis revenir ne les perd pas.
+Le chiffre entre parenthèses compte les voilures de chaque propulsion. On
+coche **autant de propulsions qu'on veut** — voiles seules *et* voiles +
+1SB, par exemple — et toutes cochées, voiles et moteurs concourent ensemble
+(voir plus bas). Une propulsion décochée replie ses voilures et les sort du
+calcul ; recochée, elle les rend telles qu'on les avait laissées (toutes
+cochées si aucune ne l'était). *Tout décocher* replie toute la liste : on
+recoche alors la propulsion voulue. Le choix des propulsions — cochées
+comme décochées — est retenu d'un lancement à l'autre ; une propulsion qui
+apparaît ensuite (première passe sur un nouveau code moteur) prend le
+défaut décrit plus bas, plutôt que de rester dehors sans qu'on le sache.
+Les coches des voilures, elles, durent le temps de la séance.
 
 **Lisible d'abord.** Le tracé dispose de toute la hauteur de la page, que
 le bateau ait deux configurations ou vingt : rien dont la taille dépend de
-leur nombre ne s'empile au-dessus ou au-dessous de lui. Leur liste vit dans
-la colonne de gauche, avec sa propre barre de défilement et les boutons
-*Tout cocher* / *Tout décocher* ; chacune y porte un **code** (C1, C2…) qui
-ne bouge pas quand on coche, décoche ou change de propulsion — décocher C2
-ne renomme pas C3 — et que reprennent le guide, l'infobulle et la fiche
-d'un point. C'est le rang
-de la configuration dans l'entrepôt, la plus fournie d'abord : il peut
-donc changer quand une passe est ajoutée, incluse ou exclue. La légende des
-vents se tient
-à droite du cercle, et le guide de voilure s'affiche **à la place** du
-tracé, pas dessous. Les exports occupent un pied de page sur toute la
-largeur, les options et la recherche sont ancrées au bas de la colonne de
-gauche — Tk sert les bords avant le centre, rien ne peut donc être repoussé
-hors du cadre. Sur ce bateau — un
-cargo à voile **et** moteur — **le moteur fait partie de la voilure** :
-chaque cas de vent appelle un *jeu* voiles/moteur, pas une voile seule.
-L'étape s'ouvre donc **par défaut** sur *Tout confondu* (quand il est
-proposé), et le guide de
-voilure dit aussi *quand passer au moteur*. Pour une polaire voile pure,
-choisissez *Voiles seules* — ou changez le défaut dans la roue dentée →
-*Lissage & table* (option « Le moteur fait partie de la voilure » :
-décochée, l'étape s'ouvre sur *Voiles seules* ; modifier ce réglage
-remplace le dernier choix retenu). Les
-**trous** de la grille sont
-bouchés par **interpolation linéaire le long du TWA** (jamais au-delà de la
-première ou de la dernière mesure — prétendre une vitesse au vent debout
-jamais mesurée serait un mensonge que le routeur prendrait au pied de la
-lettre) ; sur le tracé, les points pleins sont mesurés, les points creux
-interpolés. L'export **`.pol` est une grille pleine** : les cases jamais
-observées y valent 0, ce qu'un routeur lit comme « zone où le bateau ne
-marche pas » (le vent debout, typiquement). L'export **`.csv`** donne pour
-chaque case la vitesse, son origine (mesurée / interpolée) et la voilure
-gagnante ; l'export *une polaire par configuration*, à droite du pied de
-page, donne pour le tableur la table de chaque configuration, avec son
-indice de confiance.
+leur nombre ne s'empile au-dessus ou au-dessous de lui. Les configurations
+vivent dans la colonne de gauche, avec sa propre barre de défilement et
+les boutons *Tout cocher* / *Tout décocher*. Elles y tiennent en **une
+seule colonne** dont chaque libellé passe à la ligne plutôt que d'être
+coupé, et la colonne s'**élargit à la souris** : tirez la poignée qui la
+sépare du tracé — la largeur choisie est retenue. Chacune y porte un
+**code** (C1, C2…) qui ne bouge pas quand on coche, décoche ou change de
+propulsion — décocher C2 ne renomme pas C3 — et que reprennent le guide,
+l'infobulle et la fiche d'un point. C'est le rang de la configuration dans
+l'entrepôt, la plus fournie d'abord : il peut donc changer quand une passe
+est ajoutée, incluse ou exclue. La légende des vents se tient à droite du
+cercle ; au-delà de dix vents les couleurs se répètent, et c'est alors le
+**trait** (tirets, puis pointillés) qui distingue les courbes. Le guide de
+voilure s'affiche **à la place** du tracé, pas dessous. Les exports
+occupent un pied de page sur toute la largeur, les options et la recherche
+sont ancrées au bas de la colonne de gauche — Tk sert les bords avant le
+centre, rien ne peut donc être repoussé hors du cadre.
+
+Sur ce bateau — un cargo à voile **et** moteur — **le moteur fait partie
+de la voilure** : chaque cas de vent appelle un *jeu* voiles/moteur, pas
+une voile seule. L'étape s'ouvre donc **par défaut** avec toutes les
+propulsions cochées, et le guide de voilure dit aussi *quand passer au
+moteur*. Pour une polaire voile pure, ne cochez que *Voiles seules* — ou
+changez le défaut dans la roue dentée → *Lissage & table* (option « Le
+moteur fait partie de la voilure » : décochée, seule *Voiles seules* est
+cochée à l'ouverture ; modifier ce réglage remplace le dernier choix
+retenu).
+
+Les **trous** de la grille sont bouchés par **interpolation linéaire le
+long du TWA** (jamais au-delà de la première ou de la dernière mesure —
+prétendre une vitesse au vent debout jamais mesurée serait un mensonge que
+le routeur prendrait au pied de la lettre) ; sur le tracé, les points
+pleins sont mesurés, les points creux interpolés. L'export **`.pol` est
+une grille pleine** : les cases jamais observées y valent 0, ce qu'un
+routeur lit comme « zone où le bateau ne marche pas » (le vent debout,
+typiquement). L'export **`.csv`** donne pour chaque case la vitesse, son
+origine (mesurée / interpolée) et la voilure gagnante ; l'export *une
+polaire par configuration*, à droite du pied de page, donne pour le
+tableur la table de chaque configuration, avec son indice de confiance.
 
 Un **bandeau d'acquisition** court en haut de toutes les pages : l'état de
 la prise, son chrono, la voilure enregistrée, et le bouton démarrer/arrêter.
@@ -849,7 +858,7 @@ gardent l'angle calculé au moment de la prise. Mais tant qu'une passe reste
 couverte par le tampon glissant, ses trames brutes sont encore là :
 sélectionnez-la dans l'Entrepôt et cliquez **Recalculer depuis le tampon**.
 Tout est rejoué avec les réglages du moment — rien n'est estimé, rien n'est
-extrapolé. L'annotation (voiles/moteurs/dérive) est conservée, le compte
+extrapolé. L'annotation (voiles/moteurs) est conservée, le compte
 rendu chiffre ce qui a changé, et l'ancienne version part dans la Corbeille
 d'où elle revient d'un clic. Au-delà de la fenêtre conservée, l'application
 refuse plutôt que de produire un résultat tronqué — d'où l'intérêt d'une
