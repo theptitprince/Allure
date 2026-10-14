@@ -14,6 +14,8 @@
 
 </div>
 
+**Français** · [English](README.en.md)
+
 ---
 
 > [!NOTE]
