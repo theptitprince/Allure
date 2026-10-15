@@ -13,6 +13,10 @@
 #
 # Vous devriez avoir recu une copie de la GNU General Public License avec ce
 # programme (fichier LICENSE). Sinon, voir <https://www.gnu.org/licenses/>.
+#
+# Allure, par ETDEL -- https://github.com/theptitprince/Allure
+# Licence GPL-3.0-or-later, avec des conditions additionnelles (article 7)
+# decrites dans le fichier NOTICE : cette mention doit rester visible.
 
 """
 allure.py -- "Allure"
@@ -39,9 +43,9 @@ Organisation de l'interface :
 
 - Les PARAMETRES s'ouvrent par la roue dentee en haut a droite : une page
   qui remplace le contenu courant, organisee par categories (bandeau de
-  navigation a droite) -- voiles/moteurs, voies d'ecoute, lissage,
-  tampon glissant, table polaire, sauvegardes. "Enregistrer" ramene a
-  l'etape d'ou l'on venait.
+  navigation a gauche) -- voiles/moteurs, voies d'ecoute, lissage,
+  tampon glissant, table polaire, sauvegardes, et "A propos" (mention
+  d'auteur et licence). "Enregistrer" ramene a l'etape d'ou l'on venait.
 
 Prerequis -- UNE SEULE commande (ou installer_dependances.bat) :
     python -m pip install matplotlib
@@ -65,6 +69,7 @@ import sys
 import threading
 import time
 import traceback
+import webbrowser
 import tkinter as tk
 from collections import deque
 import tkinter.font as tkfont
@@ -1189,7 +1194,7 @@ class App(tk.Tk):
         self._settings_return_step = None
 
     def _build_nav(self, parent):
-        """Bandeau de titre (nom + version + credit, roue dentee a droite)
+        """Bandeau de titre (nom + version + mention d'auteur, roue dentee a droite)
         puis bandeau HORIZONTAL des 3 etapes : les etapes se lisent comme
         un fil d'ariane au-dessus du contenu, dans l'ordre du parcours des
         donnees. Pas de bouton de reduction dedie : le bouton natif de la
@@ -1231,7 +1236,10 @@ class App(tk.Tk):
                  fg=FG_DIGIT, font=("Segoe UI", 15, "bold")).pack(side="left")
         tk.Label(line1, text=f"  \u2014  {pcfg.APP_TAGLINE}", bg=BG_HEADER, fg=FG_LABEL,
                  font=("Segoe UI", 11)).pack(side="left", pady=(3, 0))
-        tk.Label(title_box, text=f"by {pcfg.APP_CREDIT}", bg=BG_HEADER, fg=FG_LABEL_DIM,
+        # La mention d'auteur, en permanence et sur toutes les pages : la
+        # licence l'exige visible (conditions additionnelles, article 7 --
+        # voir NOTICE et pcfg.APP_MENTION).
+        tk.Label(title_box, text=pcfg.APP_MENTION, bg=BG_HEADER, fg=FG_LABEL_DIM,
                  font=("Segoe UI", 8)).pack(anchor="w")
 
         # Filet de separation, puis bandeau des etapes.
@@ -2672,7 +2680,9 @@ class App(tk.Tk):
     # Ordre de LECTURE voulu : d'abord ce qui decrit le bateau et ce qui
     # entre (materiel, sources), puis ce que l'application en fait
     # (manoeuvres, traitement), enfin ce qui entoure (affichage,
-    # sauvegardes). Chaque categorie tient en un mot-cle.
+    # sauvegardes) -- et, en dernier, "A propos", qui ne regle rien : la
+    # mention d'auteur et les avis legaux. Chaque categorie tient en un
+    # mot-cle.
     SETTINGS_CATEGORIES = [
         ("materiel", "Voiles & moteurs"),
         ("sources", "Sources & tampon"),
@@ -2680,6 +2690,7 @@ class App(tk.Tk):
         ("traitement", "Lissage & table"),
         ("affichage", "Affichage & fenetre"),
         ("sauvegarde", "Sauvegardes"),
+        ("apropos", "A propos"),
     ]
 
     def _build_step_parametres(self, parent):
@@ -2754,6 +2765,7 @@ class App(tk.Tk):
         self._build_settings_manoeuvre(self._settings_frames["manoeuvre"])
         self._build_settings_affichage(self._settings_frames["affichage"])
         self._build_settings_sauvegarde(self._settings_frames["sauvegarde"])
+        self._build_settings_apropos(self._settings_frames["apropos"])
 
         self._current_settings_category = None
         self._show_settings_category(self.SETTINGS_CATEGORIES[0][0])
@@ -3866,7 +3878,7 @@ class App(tk.Tk):
         tk.Button(settings_backup_row, text="Importer des reglages...",
                   command=self._import_settings).pack(side="left")
 
-        tk.Label(inner, text=f"{pcfg.APP_NAME} v{pcfg.APP_VERSION} -- by {pcfg.APP_CREDIT}",
+        tk.Label(inner, text=pcfg.APP_MENTION,
                  bg=BG_APP, fg=FG_LABEL_DIM, font=("Segoe UI", 8)).pack(
             anchor="w", padx=16, pady=(10, 12))
 
@@ -3884,7 +3896,13 @@ class App(tk.Tk):
         """Hauteur du diagnostic = nombre de lignes AFFICHEES (chemins
         replies compris) : ni ligne vide en bas, ni derniere ligne cachee --
         et, tout etant visible, la molette continue de faire defiler la page."""
-        t = getattr(self, "diag_txt", None)
+        self._fit_text_height(getattr(self, "diag_txt", None))
+
+    @staticmethod
+    def _fit_text_height(t):
+        """Ajuste la hauteur d'un Text en lecture seule au nombre de lignes
+        qu'il AFFICHE (lignes repliees comprises) -- la regle du diagnostic,
+        reprise par les avis legaux de la page A propos."""
         if t is None:
             return
         try:
@@ -3893,6 +3911,57 @@ class App(tk.Tk):
             return
         if lines != int(t.cget("height")):
             t.configure(height=max(1, lines))
+
+    # ---------- Categorie : a propos ----------
+    def _build_settings_apropos(self, parent):
+        """Qui a fait Allure, sous quelle licence, et ou lire les textes :
+        la mention d'auteur et les avis legaux que la licence demande
+        d'afficher (conditions additionnelles, article 7 -- voir NOTICE).
+        Aucun reglage ici ; les textes viennent de allure_config, ecrits dans
+        le code pour que l'exe autonome affiche exactement les memes."""
+        outer, inner = make_scrollable(parent, height=1)
+        outer.pack(fill="both", expand=True)
+
+        f_app = section(inner, pcfg.APP_NAME)
+        mention_lbl = tk.Label(f_app, text=pcfg.APP_MENTION, bg=BG_APP, fg=FG_DIGIT,
+                               font=FONT_LABEL_BOLD)
+        mention_lbl.pack(fill="x", padx=6, pady=(4, 2))
+        follow_width(mention_lbl)
+        note(f_app, f"Version {pcfg.APP_VERSION}  \u2014  {pcfg.APP_TAGLINE} de vitesse "
+                    "a partir de trames NMEA0183.")
+        about_row = tk.Frame(f_app, bg=BG_APP)
+        about_row.pack(fill="x", padx=6, pady=(0, 8))
+        tk.Button(about_row, text="Ouvrir la page du projet",
+                  command=self._open_project_page).pack(side="left")
+
+        f_lic = section(inner, "Licence")
+        # Text en lecture seule, comme le diagnostic des Sauvegardes : le
+        # texte se replie a la largeur de la page, et on peut le selectionner
+        # pour le copier (adresses comprises). Sa hauteur suit le nombre de
+        # lignes affichees (voir _fit_text_height).
+        self.licence_txt = tk.Text(f_lic, height=12, width=40, wrap="word", bg=BG_APP,
+                                   fg=FG_LABEL, font=FONT_LABEL, relief="flat", bd=0,
+                                   highlightthickness=0, padx=0, pady=0, takefocus=0)
+        self.licence_txt.pack(fill="x", padx=6, pady=(2, 8))
+        self.licence_txt.insert("1.0", pcfg.legal_notice_text())
+        # 'disabled' interdit la frappe, pas la selection ni la copie.
+        self.licence_txt.configure(state="disabled")
+        self.licence_txt.bind("<Configure>",
+                              lambda _e: self._fit_text_height(self.licence_txt), add="+")
+        self._fit_text_height(self.licence_txt)
+
+    def _open_project_page(self):
+        """Ouvre la page du projet (pcfg.APP_URL) dans le navigateur par
+        defaut. Sans navigateur utilisable, l'adresse s'affiche pour etre
+        recopiee -- elle figure aussi, selectionnable, dans les avis legaux."""
+        try:
+            opened = webbrowser.open(pcfg.APP_URL)
+        except Exception:
+            opened = False
+        if not opened:
+            messagebox.showinfo("Page du projet",
+                                "Aucun navigateur n'a pu etre ouvert.\n\n"
+                                f"La page du projet se trouve ici :\n{pcfg.APP_URL}")
 
     def _build_editable_list(self, parent, title, items, on_change=None):
         """Liste editable (+ / -). on_change est appele apres chaque ajout ou

@@ -13,6 +13,10 @@
 #
 # Vous devriez avoir recu une copie de la GNU General Public License avec ce
 # programme (fichier LICENSE). Sinon, voir <https://www.gnu.org/licenses/>.
+#
+# Allure, par ETDEL -- https://github.com/theptitprince/Allure
+# Licence GPL-3.0-or-later, avec des conditions additionnelles (article 7)
+# decrites dans le fichier NOTICE : cette mention doit rester visible.
 
 """
 allure_engine.py

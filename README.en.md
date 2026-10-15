@@ -4,7 +4,7 @@
 
 **Speed polar generator from NMEA0183 sentences, with a rolling recording buffer, live monitoring and a cumulative store.**
 
-![Version](https://img.shields.io/badge/version-2.2a-2ea44f)
+![Version](https://img.shields.io/badge/version-2.2b-2ea44f)
 ![Python](https://img.shields.io/badge/Python-3.8%2B-3776AB?logo=python&logoColor=white)
 ![tkinter](https://img.shields.io/badge/interface-tkinter-3776AB?logo=python&logoColor=white)
 ![matplotlib](https://img.shields.io/badge/plots-matplotlib-11557C)
@@ -34,7 +34,7 @@ annotated by sail plan, accumulates them outing after outing in a store, and
 derives from them polars per configuration, a max polar for routing
 (`.pol`, `.csv`, TimeZero) and a sail guide.
 
-Current version: 2.2a — the release history is in [CHANGELOG.md](CHANGELOG.md) (in French).
+Current version: 2.2b — the release history is in [CHANGELOG.md](CHANGELOG.md) (in French).
 
 ## Contents
 
@@ -216,6 +216,7 @@ Alongside them, files that are not part of the program itself:
 | `construire_exe.bat` | builds `Allure.exe`, standalone — section 3 |
 | `CHANGELOG.md` | the version log (in French) |
 | `LICENSE` | the text of the program's license (see "License" at the end of the document) |
+| `NOTICE` | the additional license terms (section 7): the notice to keep |
 
 ---
 
@@ -405,14 +406,16 @@ it.
 ### Settings
 
 The **Paramètres** open from the **gear icon at the top right** (the step
-bar disappears while they are open). Six categories, in the order of the
+bar disappears while they are open). Seven categories, in the order of the
 path: **Voiles & moteurs** (sails & engines), **Sources & tampon** (sources
 & buffer: acquisition type, listening channels, analysis and choice of
 sources, rolling buffer), **Manœuvres** (maneuvers: the sample filter *and*
 the automatic stop — see section 8), **Lissage & table** (smoothing &
 table: smoothing of the measurement, polar table, archive sheet),
 **Affichage & fenêtre** (damping, theme, notification area),
-**Sauvegardes** (store and settings). *Enregistrer les paramètres* (save
+**Sauvegardes** (store and settings), and last **A propos** (about: the
+author notice, the version, the license and its additional terms, a button
+to the project page — see section 10). *Enregistrer les paramètres* (save
 the settings) takes you back to the step you came from.
 
 ### Light / dark theme
@@ -1021,11 +1024,29 @@ same license, with its source code and the copyright notice. The program
 is provided **without any warranty**: the polars it produces help you tune
 the boat, they replace neither your judgment nor your navigation documents.
 
+### Additional terms (section 7)
+
+The GPL v3 lets the author add a few terms (section 7). Allure's are in the
+[`NOTICE`](NOTICE) file, in French and in English:
+
+- **Attribution**: every copy or modified version must keep, visible to the user (an "About"
+  window or equivalent) and in its documentation, the notice:
+
+  > Allure, par ETDEL — https://github.com/theptitprince/Allure
+
+  A modified version may prefix it with "D'après" (or "Based on") and add its own credits,
+  but may neither remove nor hide it.
+- **Origin**: a modified version must state clearly that it has been modified, and must not
+  present itself as the original or as endorsed by ETDEL.
+
+In Allure, this notice is shown in the header banner of every page and in
+*Paramètres › A propos*.
+
 The full text of the license is in the repository's `LICENSE` file and at
 <https://www.gnu.org/licenses/gpl-3.0.html>. Each source module
 (`allure.py`, `allure_engine.py`, `allure_config.py`, `allure_buffer.py`)
 carries the corresponding license header, and the two `.bat` scripts repeat
-the short notice.
+the short notice; all of them point to `LICENSE` and `NOTICE`.
 
 ---
 

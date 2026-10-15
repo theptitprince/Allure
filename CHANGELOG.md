@@ -23,6 +23,39 @@ relit toujours les données de n'importe quelle version antérieure.
 
 ---
 
+## 2.2b
+
+Allure dit désormais qui l'a fait et sous quelle licence : la mention
+d'auteur s'affiche sur toutes les pages, et une page *A propos* rassemble
+les avis légaux.
+
+### Ajouté
+
+- **`NOTICE`**, à la racine du dépôt : les conditions additionnelles de la
+  licence (article 7 de la GPL v3), en français et en anglais. Toute copie
+  ou version modifiée doit garder, visible, la mention « Allure, par ETDEL —
+  https://github.com/theptitprince/Allure » ; une version modifiée doit le
+  dire, et ne pas se présenter comme l'original.
+- **Paramètres → *A propos***, septième et dernière catégorie : la mention
+  et la version, un bouton *Ouvrir la page du projet*, et les avis légaux
+  dans un texte sélectionnable — licence GPL v3 ou ultérieure et ses
+  conditions additionnelles, absence de garantie, où lire `LICENSE` et
+  `NOTICE`. Ces textes sont écrits dans le code : l'exe autonome, qui
+  n'embarque ni `LICENSE` ni `NOTICE`, affiche les mêmes.
+- Les quatre modules `.py` et les deux scripts `.bat` portent, sous leur
+  en-tête de licence, la mention et le renvoi à `NOTICE`.
+
+### Modifié
+
+- Le **bandeau d'en-tête**, sur toutes les pages, affiche la mention
+  « Allure, par ETDEL — https://github.com/theptitprince/Allure » au lieu
+  de « by ETDEL 2026 » ; le bas de la catégorie *Sauvegardes* aussi.
+- README, en français et en anglais : la section *Licence* présente les
+  conditions additionnelles (article 7), le tableau des fichiers gagne
+  `NOTICE`, et les Paramètres comptent sept catégories au lieu de six.
+
+---
+
 ## 2.2a
 
 La dérive disparaît, les propulsions se cochent, et tout l'affichage a été

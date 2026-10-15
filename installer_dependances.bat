@@ -2,6 +2,10 @@
 rem Allure -- generateur de polaires de vitesse a partir de trames NMEA0183
 rem Copyright (C) 2026 ETDEL -- GPL-3.0-or-later (voir LICENSE)
 rem
+rem Allure, par ETDEL -- https://github.com/theptitprince/Allure
+rem Licence GPL-3.0-or-later, avec des conditions additionnelles (article 7)
+rem decrites dans le fichier NOTICE : cette mention doit rester visible.
+rem
 rem Installe les bibliotheques dont Allure a besoin, pour la commande
 rem "python" (celle qu'utilise le README pour lancer Allure) :
 rem   - matplotlib          indispensable (trace des polaires et des cadrans)

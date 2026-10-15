@@ -4,7 +4,7 @@
 
 **Générateur de polaires de vitesse à partir de trames NMEA0183, avec tampon d'enregistrement glissant, suivi en direct et entrepôt cumulatif.**
 
-![Version](https://img.shields.io/badge/version-2.2a-2ea44f)
+![Version](https://img.shields.io/badge/version-2.2b-2ea44f)
 ![Python](https://img.shields.io/badge/Python-3.8%2B-3776AB?logo=python&logoColor=white)
 ![tkinter](https://img.shields.io/badge/interface-tkinter-3776AB?logo=python&logoColor=white)
 ![matplotlib](https://img.shields.io/badge/trac%C3%A9s-matplotlib-11557C)
@@ -32,7 +32,7 @@ annotées par voilure, les accumule sortie après sortie dans un entrepôt, et
 en tire des polaires par configuration, une polaire max pour le routage
 (`.pol`, `.csv`, TimeZero) et un guide de voilure.
 
-Version actuelle : 2.2a — l'historique des livraisons est dans [CHANGELOG.md](CHANGELOG.md).
+Version actuelle : 2.2b — l'historique des livraisons est dans [CHANGELOG.md](CHANGELOG.md).
 
 ## Sommaire
 
@@ -212,6 +212,7 @@ part : `allure.py` se lance directement.
 | `construire_exe.bat` | construit `Allure.exe`, autonome — section 3 |
 | `CHANGELOG.md` | le journal des versions |
 | `LICENSE` | le texte de la licence du programme (voir « Licence » en fin de document) |
+| `NOTICE` | les conditions additionnelles de la licence (article 7) : la mention à conserver |
 
 ---
 
@@ -397,14 +398,16 @@ Polaires, et s'arrête sans avoir à aller la chercher.
 ### Les Paramètres
 
 Les **Paramètres** s'ouvrent par la **roue dentée en haut à droite** (le
-bandeau des étapes s'efface pendant qu'ils sont ouverts). Six catégories,
+bandeau des étapes s'efface pendant qu'ils sont ouverts). Sept catégories,
 dans l'ordre du parcours : **Voiles & moteurs**, **Sources & tampon** (type
 d'acquisition, voies d'écoute, analyse et choix des sources, tampon
 glissant), **Manœuvres** (le filtre d'échantillons *et* l'arrêt automatique
 — voir section 8), **Lissage & table** (lissage de la mesure, table
 polaire, fiche d'archive), **Affichage & fenêtre** (amortissement, thème,
-zone de notification), **Sauvegardes** (entrepôt et réglages).
-*Enregistrer les paramètres* ramène à l'étape d'où l'on venait.
+zone de notification), **Sauvegardes** (entrepôt et réglages), et en
+dernier **A propos** (la mention d'auteur, la version, la licence et ses
+conditions additionnelles, un bouton vers la page du projet — voir
+section 10). *Enregistrer les paramètres* ramène à l'étape d'où l'on venait.
 
 ### Thème clair / sombre
 
@@ -1008,11 +1011,29 @@ est fourni **sans aucune garantie** : les polaires qu'il produit vous aident
 à régler le bateau, elles ne remplacent ni votre jugement ni vos documents de
 navigation.
 
+### Conditions additionnelles (article 7)
+
+La GPL v3 permet à l'auteur d'ajouter quelques conditions (article 7). Celles d'Allure sont dans
+le fichier [`NOTICE`](NOTICE), en français et en anglais :
+
+- **Attribution** : toute copie ou version modifiée doit garder, visible pour l'utilisateur
+  (fenêtre « À propos » ou équivalent) et dans sa documentation, la mention :
+
+  > Allure, par ETDEL — https://github.com/theptitprince/Allure
+
+  Une version modifiée peut la faire précéder de « D'après » et ajouter ses propres crédits,
+  sans la retirer ni la masquer.
+- **Origine** : une version modifiée doit dire clairement qu'elle est modifiée, et ne doit se
+  présenter ni comme l'original, ni comme approuvée par ETDEL.
+
+Dans Allure, cette mention s'affiche dans le bandeau d'en-tête de toutes les pages et dans
+*Paramètres › A propos*.
+
 Le texte intégral de la licence est dans le fichier `LICENSE` du dépôt et
 sur <https://www.gnu.org/licenses/gpl-3.0.html>. Chaque module source
 (`allure.py`, `allure_engine.py`, `allure_config.py`, `allure_buffer.py`)
 porte l'en-tête de licence correspondant, et les deux scripts `.bat` en
-rappellent la mention abrégée.
+rappellent la mention abrégée ; tous renvoient à `LICENSE` et à `NOTICE`.
 
 ---
 

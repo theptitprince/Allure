@@ -13,6 +13,10 @@
 #
 # Vous devriez avoir recu une copie de la GNU General Public License avec ce
 # programme (fichier LICENSE). Sinon, voir <https://www.gnu.org/licenses/>.
+#
+# Allure, par ETDEL -- https://github.com/theptitprince/Allure
+# Licence GPL-3.0-or-later, avec des conditions additionnelles (article 7)
+# decrites dans le fichier NOTICE : cette mention doit rester visible.
 
 """
 allure_config.py
@@ -98,7 +102,64 @@ APP_CREDIT = "ETDEL 2026"
 # visage (nouvelle etape, nouveau format, refonte) ; la lettre suffit pour
 # une correction ou un ajustement. Chaque livraison a son entree dans
 # CHANGELOG.md, a la racine du depot.
-APP_VERSION = "2.2a"
+APP_VERSION = "2.2b"
+
+# =========================================================================
+# Mention d'auteur et avis legaux
+#
+# La licence d'Allure (GPL-3.0-or-later) est completee par des conditions
+# additionnelles (article 7 de la GPL v3, fichier NOTICE a la racine du
+# depot) : toute copie ou version modifiee doit garder, VISIBLE pour
+# l'utilisateur, la mention APP_MENTION. Allure l'affiche dans le bandeau
+# d'en-tete de toutes les pages, et la page Parametres > A propos donne les
+# avis legaux complets (legal_notice_text).
+#
+# Ces textes sont ecrits ICI, dans le code, et non relus dans LICENSE ou
+# NOTICE : l'exe autonome (construire_exe.bat, PyInstaller --onefile)
+# n'embarque pas ces fichiers, et il doit afficher les memes avis que le
+# script.
+# =========================================================================
+APP_URL = "https://github.com/theptitprince/Allure"
+# Chaine legale FIXE (article 7 b) : ni traduite ni reformulee. Le tiret
+# cadratin est ecrit en echappement pour que ce fichier reste en ASCII.
+APP_MENTION = APP_NAME + ", par ETDEL \u2014 " + APP_URL
+APP_COPYRIGHT = "Copyright \u00a9 2026 ETDEL"
+APP_LICENCE = "GPL-3.0-or-later"
+APP_LICENCE_URL = "https://www.gnu.org/licenses/gpl-3.0.html"
+APP_NOTICE_URL = APP_URL + "/blob/main/NOTICE"
+
+
+def legal_notice_text():
+    """Avis legaux affiches dans Parametres > A propos : la mention, le
+    copyright, la licence et ses conditions additionnelles, l'absence de
+    garantie, et ou lire les textes complets.
+
+    Fonction pure -- ni disque, ni Tk : le meme texte en script et en exe,
+    verifiable sans interface. Des paragraphes separes par une ligne vide,
+    sans retour a la ligne force : c'est le widget qui replie."""
+    return "\n".join([
+        APP_MENTION,
+        APP_COPYRIGHT,
+        "",
+        APP_NAME + " est un logiciel libre : vous pouvez le redistribuer et le "
+        "modifier selon les termes de la GNU General Public License publiee par "
+        "la Free Software Foundation, version 3 de la licence ou (a votre choix) "
+        "toute version ulterieure (" + APP_LICENCE + "), avec des conditions "
+        "additionnelles (article 7) decrites dans le fichier NOTICE.",
+        "",
+        "Ce programme est fourni SANS AUCUNE GARANTIE, sans meme la garantie "
+        "implicite de QUALITE MARCHANDE ou d'ADEQUATION A UN USAGE PARTICULIER.",
+        "",
+        "Conditions additionnelles (article 7) : toute copie ou version modifiee "
+        "doit conserver, visible pour l'utilisateur et dans sa documentation, la "
+        "mention ci-dessus. Une version modifiee doit le dire et ne pas se "
+        "presenter comme l'original, ni comme approuvee par ETDEL.",
+        "",
+        "Texte de la licence : fichier LICENSE fourni avec le programme, ou "
+        + APP_LICENCE_URL,
+        "Conditions additionnelles : fichier NOTICE, ou " + APP_NOTICE_URL,
+    ])
+
 
 # =========================================================================
 # Ou vivent les fichiers

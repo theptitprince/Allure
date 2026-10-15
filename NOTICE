@@ -1,0 +1,57 @@
+Allure
+Copyright (C) 2026 ETDEL — https://github.com/theptitprince/Allure
+
+Ce programme est un logiciel libre : vous pouvez le redistribuer et le modifier selon les
+termes de la GNU General Public License publiée par la Free Software Foundation, version 3
+de la licence ou (à votre choix) toute version ultérieure (GPL-3.0-or-later). Il est fourni
+SANS AUCUNE GARANTIE. Le texte de la licence est dans le fichier LICENSE.
+
+Conditions additionnelles (article 7 de la GPL v3)
+--------------------------------------------------
+Ces conditions s'appliquent au travail d'ETDEL contenu dans ce dépôt.
+
+1. Attribution (article 7 b). Toute copie et toute version modifiée, en tout ou en partie,
+   doit conserver, intacte et visible, la mention :
+
+       Allure, par ETDEL — https://github.com/theptitprince/Allure
+
+   a) dans les mentions légales qu'elle affiche à l'utilisateur (fenêtre « À propos » ou
+      écran équivalent ; dans Allure : bandeau d'en-tête (toutes les pages) et
+      Paramètres › A propos) ;
+   b) dans sa documentation (README ou équivalent).
+   Elle doit aussi conserver les mentions d'auteur placées en tête des fichiers source.
+   Une version modifiée peut faire précéder la mention de « D'après » et ajouter ses propres
+   crédits, mais ne peut ni la retirer ni la masquer.
+
+2. Origine (article 7 c). Une version modifiée doit indiquer clairement qu'elle est modifiée.
+   Elle ne doit se présenter ni comme la version originale, ni comme approuvée par ETDEL.
+
+English translation (the French text above prevails)
+====================================================
+
+Allure
+Copyright (C) 2026 ETDEL — https://github.com/theptitprince/Allure
+
+This program is free software: you can redistribute it and/or modify it under the terms of
+the GNU General Public License as published by the Free Software Foundation, either version 3
+of the License, or (at your option) any later version (GPL-3.0-or-later). It comes WITHOUT
+ANY WARRANTY. The license text is in the LICENSE file.
+
+Additional terms (section 7 of the GPL v3)
+------------------------------------------
+These terms apply to ETDEL's work contained in this repository.
+
+1. Attribution (section 7 b). Every copy and every modified version, in whole or in part,
+   must keep, intact and visible, the notice:
+
+       Allure, par ETDEL — https://github.com/theptitprince/Allure
+
+   a) in the legal notices it displays to the user (an "About" window or equivalent screen;
+      in Allure: the header banner (every page) and Paramètres › A propos (settings));
+   b) in its documentation (README or equivalent).
+   It must also keep the author notices at the top of the source files.
+   A modified version may prefix the notice with "D'après" (or "Based on") and add its own
+   credits, but may neither remove nor hide it.
+
+2. Origin (section 7 c). A modified version must state clearly that it has been modified.
+   It must not present itself as the original version, nor as endorsed by ETDEL.
